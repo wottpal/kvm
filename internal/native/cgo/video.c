@@ -489,6 +489,7 @@ static struct
     RK_U32 height;
     RK_U32 source_fps;
     volatile RK_U32 encode_fps; // also read lock-free by the capture loop
+    RK_U32 rc_fps;    // rate control's frame rate, fixed per channel (venc_set_rc_attr_live)
     RK_U32 gop;       // nominal GOP length
     RK_U32 gop_nudge; // 0/1 frame added by the keyframe GOP-nudge fallback
     RK_U32 bitrate;
@@ -704,6 +705,7 @@ static int32_t venc_start(RK_U32 width, RK_U32 height, RK_U32 source_fps)
     venc_live.height = height;
     venc_live.source_fps = source_fps;
     venc_live.encode_fps = venc_encode_fps(source_fps, params.max_fps);
+    venc_live.rc_fps = venc_live.encode_fps;
     venc_live.gop = venc_gop_frames(venc_live.encode_fps, params.gop_seconds);
     venc_live.gop_nudge = 0;
     venc_bitrates(&params, width, height, &venc_live.bitrate, &venc_live.max_bitrate);
@@ -759,6 +761,21 @@ out:
 // alone; a frame-rate or GOP-length change makes MPP (under rockit) resend
 // SPS/PPS with an IDR (mpp_enc_proc_rc_cfg -> enc_set_resend_hdr). Returns
 // false on any failure so the caller can fall back to a stream restart.
+// Rate attributes for a running channel. Rate control keeps the frame rate
+// the channel was created with: a live change of it makes rockit reprogram the
+// encoder's input stride in pixels instead of bytes (packed YUV 4:2:2), and
+// the kernel then drops every frame ("frame info no equal set drop") until the
+// channel is recreated. The capture loop drops frames to encode_fps, and the
+// bitrates are scaled so that their per-second targets hold.
+static void venc_set_rc_attr_live(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 max_bitrate,
+                                  RK_U32 encode_fps, RK_U32 gop)
+{
+    const RK_U32 rc_fps = venc_live.rc_fps;
+    const RK_U32 fps = encode_fps > 0 ? encode_fps : rc_fps;
+    venc_set_rc_attr(stAttr, venc_live.hevc, (RK_U32)((uint64_t)bitrate * rc_fps / fps),
+                     (RK_U32)((uint64_t)max_bitrate * rc_fps / fps), rc_fps, gop);
+}
+
 static bool venc_apply_live_locked(const jetkvm_venc_params_t *p)
 {
     const RK_U32 encode_fps = venc_encode_fps(venc_live.source_fps, p->max_fps);
@@ -774,7 +791,7 @@ static bool venc_apply_live_locked(const jetkvm_venc_params_t *p)
         int32_t ret = RK_MPI_VENC_GetChnAttr(VENC_CHANNEL, &stAttr);
         if (ret == RK_SUCCESS)
         {
-            venc_set_rc_attr(&stAttr, venc_live.hevc, bitrate, max_bitrate, encode_fps, gop + venc_live.gop_nudge);
+            venc_set_rc_attr_live(&stAttr, bitrate, max_bitrate, encode_fps, gop + venc_live.gop_nudge);
             ret = RK_MPI_VENC_SetChnAttr(VENC_CHANNEL, &stAttr);
         }
         if (ret != RK_SUCCESS)
@@ -903,8 +920,8 @@ static int32_t venc_gop_nudge_locked(void)
         return ret;
     }
     const RK_U32 nudge = venc_live.gop_nudge ^ 1;
-    venc_set_rc_attr(&stAttr, venc_live.hevc, venc_live.bitrate, venc_live.max_bitrate,
-                     venc_live.encode_fps, venc_live.gop + nudge);
+    venc_set_rc_attr_live(&stAttr, venc_live.bitrate, venc_live.max_bitrate, venc_live.encode_fps,
+                          venc_live.gop + nudge);
     ret = RK_MPI_VENC_SetChnAttr(VENC_CHANNEL, &stAttr);
     if (ret == RK_SUCCESS)
     {
@@ -1470,8 +1487,8 @@ void *run_video_stream(void *arg)
             log_trace("got frame, bytesused = %d", tmp_plane.bytesused);
             // Drop frames evenly to encode encode_fps of fps. Done here rather
             // than via the VENC dst frame rate, whose drop behaviour rockit
-            // does not document; the encoder is configured for encode_fps.
-            // encode_fps can change live (venc_apply_live_locked).
+            // does not document. encode_fps can change live; rate control
+            // then keeps its frame rate (venc_set_rc_attr_live).
             frame_credit += venc_live.encode_fps;
             if (frame_credit < fps)
             {

@@ -183,7 +183,10 @@ It skips HTML comments and fenced code blocks.
   - Bitrate, QP and AQ apply to the running channel without a keyframe; frame rate and GOP apply live and cost one
     keyframe. If a live change fails, the stream restarts the way a quality-factor change does (capture and encoder
     only; EDID and HDMI hot-plug are untouched).
-  - `maxFps` drops captured frames evenly before the encoder.
+  - `maxFps` drops captured frames evenly before the encoder. Rate control keeps the frame rate the channel was
+    created with, and the bitrates are scaled to it: changing it live made rockit reprogram the encoder's input stride
+    in pixels instead of bytes (packed YUV 4:2:2), and the kernel then dropped every frame (`frame info no equal set
+    drop`) until the stream restarted (before, the video stopped after any quality change between 60 and 30 fps).
   - Overrides live in memory only. They reset to the defaults (D05, env included) when the stream stops (the last
     session leaves, or a session pauses it) and when the stream quality factor changes.
   - Status object: the parameters, plus `sourceFps`, `encodeFps`, `gopFrames`, `effectiveBitrateKbps`,
