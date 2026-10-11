@@ -492,6 +492,8 @@ func handleSessionRequest(
 	cancelKeyboardMacro()
 
 	currentSession = session
+	// The stream keeps running: drop the previous session's encoder overrides.
+	go resetEncoderOverrides(session)
 	_ = wsjson.Write(context.Background(), c, gin.H{"type": "answer", "data": sd})
 	return nil
 }

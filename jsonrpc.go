@@ -204,12 +204,66 @@ func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
 	return nativeInstance.VideoGetEncoderParams()
 }
 
+// Encoder overrides belong to the session that set them. The stream keeps
+// running across a session handoff, so the native reset on VideoStop does not
+// happen then: resetEncoderOverrides restores the defaults instead, and only
+// the current session may set overrides. encoderParamsMu also serialises the
+// read-merge-write of partial updates (each RPC runs in its own goroutine).
+var (
+	encoderParamsMu    sync.Mutex
+	encoderParamsOwner *Session
+	// encoderDefaults are the native process's parameters before any client
+	// changed them (compiled defaults and env overrides).
+	encoderDefaults *native.VideoEncoderParams
+)
+
+// recordEncoderDefaults notes the defaults when the native process (re)starts;
+// a restarted process has dropped every override.
+func recordEncoderDefaults() {
+	status, err := nativeInstance.VideoGetEncoderParams()
+	encoderParamsMu.Lock()
+	defer encoderParamsMu.Unlock()
+	encoderParamsOwner = nil
+	if err != nil {
+		encoderDefaults = nil
+		nativeLogger.Warn().Err(err).Msg("could not read the encoder defaults")
+		return
+	}
+	defaults := status.VideoEncoderParams
+	encoderDefaults = &defaults
+}
+
+// resetEncoderOverrides restores the defaults if a session other than session
+// set overrides.
+func resetEncoderOverrides(session *Session) {
+	encoderParamsMu.Lock()
+	defer encoderParamsMu.Unlock()
+	if encoderParamsOwner == nil || encoderParamsOwner == session {
+		return
+	}
+	encoderParamsOwner = nil
+	if encoderDefaults == nil {
+		return
+	}
+	if err := nativeInstance.VideoSetEncoderParams(*encoderDefaults); err != nil {
+		logger.Warn().Err(err).Msg("could not reset the encoder overrides of the previous session")
+		return
+	}
+	logger.Info().Msg("encoder overrides of the previous session reset to the defaults")
+}
+
 // rpcSetVideoEncoderParams applies a partial update (omitted fields keep their
 // value) and returns the effective configuration. Changes are applied to the
 // running encoder (restart of capture + VENC only as fallback, never EDID or
 // hot-plug), are not persisted, and reset to the defaults when the stream stops
-// (last session gone, or paused) or the stream quality factor changes.
-func rpcSetVideoEncoderParams(params native.VideoEncoderParamsUpdate) (native.VideoEncoderStatus, error) {
+// (last session gone, or paused), when another session takes over, or when the
+// stream quality factor changes.
+func rpcSetVideoEncoderParams(session *Session, params native.VideoEncoderParamsUpdate) (native.VideoEncoderStatus, error) {
+	encoderParamsMu.Lock()
+	defer encoderParamsMu.Unlock()
+	if session != nil && session != currentSession {
+		return native.VideoEncoderStatus{}, errors.New("only the active session can change encoder parameters")
+	}
 	current, err := nativeInstance.VideoGetEncoderParams()
 	if err != nil {
 		return native.VideoEncoderStatus{}, err
@@ -226,10 +280,15 @@ func rpcSetVideoEncoderParams(params native.VideoEncoderParamsUpdate) (native.Vi
 	if err := nativeInstance.VideoSetEncoderParams(next); err != nil {
 		return native.VideoEncoderStatus{}, err
 	}
+	encoderParamsOwner = session
 	return nativeInstance.VideoGetEncoderParams()
 }
 
-func rpcRequestKeyframe() {
+// rpcRequestKeyframe asks for an IDR; a session being replaced gets none.
+func rpcRequestKeyframe(session *Session) {
+	if session != nil && session != currentSession {
+		return
+	}
 	requestKeyframe("rpc")
 }
 

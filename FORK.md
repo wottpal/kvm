@@ -19,7 +19,8 @@ file in the same pull request.
 - **Firmware only.** The fork never changes the web UI (`ui/`), the device's persisted configuration or its update
   mechanism. Every divergence lives in the video path and its control API.
 - **Defaults change for every client.** Encoder divergences change what every client gets, the web UI included.
-  Runtime overrides stay in memory and drop back to those defaults whenever the stream stops.
+  Runtime overrides stay in memory and drop back to those defaults whenever the stream stops or another session
+  takes over.
 - **Upstream version.** Builds keep upstream's `VERSION` (see **Releases**), so the device's auto-update replaces a fork
   build with the next upstream release.
 - **Upstream later.** No divergence is proposed upstream yet. Each records its upstream status, and a divergence is
@@ -117,12 +118,15 @@ It skips HTML comments and fenced code blocks.
   - when a WebRTC session reaches `connected`, since a handoff joins a running encoder and the first IDR may beat
     DTLS;
   - through the JSON-RPC method `requestKeyframe` (no parameters, returns `null`).
-  - Requests are rate-limited to two per second; requests inside the window coalesce into one at its end. Only the
-    current session may ask.
+  - Requests are rate-limited to two per second; requests inside the window coalesce into one at its end. PLI/FIR
+    and `requestKeyframe` count only from the current session (a replaced one lingers for a second).
   - The native side (`video_request_keyframe`) verifies each request by watching the encoder output for an IDR, and
     keeps the first path that works: `RK_MPI_VENC_RequestIDR` instant (this rockit build rejects it), non-instant (it
     returns success even when the encoder ignores it), then a one-frame change of the GOP length, which makes MPP
     resend SPS/PPS with an IDR. A new gRPC method `VideoRequestKeyframe` carries the request to the native process.
+    The wait runs on the monotonic clock, so a wall-clock step (NTP at boot) cannot stretch it.
+  - The still refresh (D07) uses the same paths but cannot wait for its own keyframe: a path that is rejected, or
+    whose refresh produces no keyframe, moves the shared choice on to the next one.
 - **Why:** without it, a decoder that lost a frame shows corruption until the next periodic keyframe; upstream's 0.5 s
   GOP bounds that by resending a full keyframe twice a second, which a long GOP cannot afford.
 - **Remove when:** upstream answers PLI/FIR with keyframes.
@@ -140,11 +144,11 @@ It skips HTML comments and fenced code blocks.
 - **What:**
   - **QP range 18–42** (keyframes up to 40) and **texture-adaptive QP off**: AQ steps and row QP deltas are zeroed,
     so the bitrate target decides quality uniformly.
-  - **GOP 4 s** instead of 0.5 s; keyframes come on demand (D04).
-  - **Super-frame re-encode** of any frame above 800 KiB, below the 1,036,800-byte frame limit of
-    `internal/native/proxy.go`, which would otherwise end the stream.
+  - **GOP 4 s** instead of 0.5 s (D07 raises it to 60 s); keyframes come on demand (D04).
+  - **Super-frame re-encode** of any frame above 800 KiB (2.5 MiB since D07), below the native frame socket's limit
+    in `internal/native/proxy.go` (then 1,036,800 bytes; D07 raises it), which would otherwise end the stream.
   - Env overrides, read once when the native process starts: `JETKVM_VENC_MIN_QP` (8–40), `JETKVM_VENC_MAX_QP`,
-    `JETKVM_VENC_GOP_SECONDS` (0.5–60) and `JETKVM_VENC_AQ` (0/1).
+    `JETKVM_VENC_GOP_SECONDS` (0.5–60; 0.5–300 since D07) and `JETKVM_VENC_AQ` (0/1).
   - `log_notice` is always emitted (rendered as info, whatever the native log level), and the encoder's configuration
     lines use it, so the active settings are visible in every log.
 - **Why:** upstream never sets rate-control parameters, so Rockchip's defaults apply: a frame-level QP floor of about
@@ -158,7 +162,9 @@ It skips HTML comments and fenced code blocks.
 - **Kind:** feature
 - **Upstream:** not proposed
 - **Files:**
+  - `cloud.go`
   - `jsonrpc.go`
+  - `native.go`
   - `internal/native/cgo/ctrl.c`
   - `internal/native/cgo/ctrl.h`
   - `internal/native/cgo/video.c`
@@ -175,7 +181,8 @@ It skips HTML comments and fenced code blocks.
   - `internal/native/proto/native.pb.go`
   - `internal/native/proto/native_grpc.pb.go`
 - **What:** two JSON-RPC methods let a client tune the encoder while it streams:
-  - `getVideoEncoderParams` returns the status object below.
+  - `getVideoEncoderParams` returns the status object below, with the running channel's frame rate, GOP and
+    bitrates while it streams.
   - `setVideoEncoderParams {"params": {...}}` merges a partial update (omitted fields keep their value), validates the
     result as a whole (an invalid one changes nothing) and returns the new status. Fields: `minQp` (8–40), `maxQp`
     (`minQp`–51), `gopSeconds`, `aq`, `maxFps` (0 = source rate, up to 120), `bitrateKbps` and `maxBitrateKbps`
@@ -183,12 +190,17 @@ It skips HTML comments and fenced code blocks.
   - Bitrate, QP and AQ apply to the running channel without a keyframe; frame rate and GOP apply live and cost one
     keyframe. If a live change fails, the stream restarts the way a quality-factor change does (capture and encoder
     only; EDID and HDMI hot-plug are untouched).
-  - `maxFps` drops captured frames evenly before the encoder. Rate control keeps the frame rate the channel was
-    created with, and the bitrates are scaled to it: changing it live made rockit reprogram the encoder's input stride
-    in pixels instead of bytes (packed YUV 4:2:2), and the kernel then dropped every frame (`frame info no equal set
-    drop`) until the stream restarted (before, the video stopped after any quality change between 60 and 30 fps).
+  - `maxFps` drops captured frames evenly before the encoder (`JETKVM_VENC_MAX_FPS`, 0–120, sets its default).
+    Rate control keeps the frame rate the channel was created with, and the bitrates are scaled to it: changing it
+    live made rockit reprogram the encoder's input stride in pixels instead of bytes (packed YUV 4:2:2), and the
+    kernel then dropped every frame (`frame info no equal set drop`) until the stream restarted (fixed in
+    `release/0.5.9-fork.3`; before, the video stopped after any quality change between 60 and 30 fps). A scaled
+    bitrate above 200,000 kbps takes the restart path instead, which recreates the channel at the new rate.
   - Overrides live in memory only. They reset to the defaults (D05, env included) when the stream stops (the last
     session leaves, or a session pauses it) and when the stream quality factor changes.
+  - Overrides belong to the session that set them, and only the current session may set them. The stream keeps
+    running across a session handoff, so the main app then restores the defaults it read when the native process
+    started; the next client never inherits the previous one's settings. Partial updates are serialised.
   - Status object: the parameters, plus `sourceFps`, `encodeFps`, `gopFrames`, `effectiveBitrateKbps`,
     `effectiveMaxBitrateKbps`, `codec` and `streaming`.
 - **Why:** the JetKVM Desktop app adapts quality to the network (frame rate, bitrate, QP floor) without re-plugging
@@ -201,6 +213,8 @@ It skips HTML comments and fenced code blocks.
 - **Kind:** feature
 - **Upstream:** not proposed
 - **Files:**
+  - `go.mod`
+  - `webrtc.go`
   - `internal/native/cgo/ctrl.h`
   - `internal/native/cgo/video.c`
   - `internal/native/cgo_linux.go`
@@ -215,17 +229,22 @@ It skips HTML comments and fenced code blocks.
     3 s, 2,000 bytes mark the picture as changed (typing does, a blinking caret does not); over about 0.1 s, the sum
     tells when the changes have stopped. A frame above an eighth of the per-frame budget (1,500 bytes at least) and
     any other keyframe count as changes.
-  - **Refresh:** a whole-frame ROI with absolute QP `stillQp` plus a keyframe request (D04's verified path). The
-    keyframe QP floor is permanently `stillQp`, since the encoder clamps ROI QPs to the frame type's floor; P-frames
-    keep `minQp`. Nothing touches rate-control parameters at runtime: changing them restarts MPP rate control, which
-    costs the next moving frames 2–7 dB.
-  - **Pacing:** refreshes are at least 1.5 s apart; a refresh above 1.5 MiB (a photo-heavy screen) raises the QP of
-    the next ones by 6, up to +24, and one below 768 KiB lowers it again.
+  - **Refresh:** a whole-frame ROI with absolute QP `stillQp` plus a keyframe request (D04's paths). The keyframe QP
+    floor is permanently `stillQp`, since the encoder clamps ROI QPs to the frame type's floor; P-frames keep
+    `minQp`. Nothing touches rate-control parameters at runtime (changing them restarts MPP rate control, which costs
+    the next moving frames 2–7 dB), except D04's GOP-nudge path where RequestIDR does not work.
+  - **Pacing:** refreshes are at least 1.5 s apart. A keyframe within 2 s after a refresh is taken as a receiver
+    repairing a loss in it: it does not count as a change, and the interval doubles (up to 16 times, 24 s) until the
+    picture changes. A refresh larger than a second of the target bitrate (at least 256 KiB, at most 1.5 MiB) raises
+    the QP of the next ones by 6, up to +24, and one below half of that lowers it again, so a slow link does not
+    stall behind near-lossless keyframes. A ROI that cannot be set is retried at the refresh interval.
   - **Parameters:** `stillQp` (1–51; at or above `minQp` turns the refresh off) joins D06's parameters and
     `JETKVM_VENC_STILL_QP` the env overrides. The GOP default becomes 60 s (`gopSeconds` up to 300).
-  - **Frame size:** the encoder's stream buffer and the native frame socket's limit (`maxFrameSize`) become 2 bytes
-    per pixel of 1920×1200 (4,608,000 bytes), and super frames re-encode above 2.5 MiB: a refresh sets its QP per
-    block, which the re-encode cannot raise.
+  - **Frame size:** the encoder's stream buffer is 2 bytes per pixel of the mode, capped at 6 MiB, which is also the
+    native frame socket's limit (`maxFrameSize`; modes up to 2176×1200 fit), and super frames re-encode above
+    2.5 MiB: a refresh sets its QP per block, which the re-encode cannot raise.
+  - **Loss repair:** the NACK responder keeps 4096 packets instead of pion's 1024 (about 1.2 MB, shorter than a
+    refresh keyframe), so a loss early in a large keyframe can still be repaired.
 - **Why:** P-frames never refine a still picture: the encoder skips blocks whose residual is small, at any QP. Measured
   on the JetKVM Desktop app's maximum level: light text 53.2 → 60.5 dB, colored text 28.1 → 51.5 dB (with the app's
   color reconstruction), a still screen 0.54 → 0.08 Mbit/s.
@@ -239,11 +258,13 @@ It skips HTML comments and fenced code blocks.
 - **Kind:** fix
 - **Upstream:** not proposed
 - **Files:**
+  - `native.go`
   - `video.go`
 - **What:** each time the native process starts (app start, update, crash recovery), upstream rewrites the EDID
   (`reapplyHostDisplayAdvertisement("native_started")`, since upstream #1476), and every EDID write pulses HDMI
-  hot-plug. The fork reads the bridge's EDID first and skips the write when it already matches; a different or
-  missing EDID is still written.
+  hot-plug. When the native process (re)starts, the fork reads the bridge's EDID first and skips the write when it
+  already matches; a different or missing EDID is still written. Explicit changes (`setEDID`, also with the same
+  EDID) always write and re-plug, as upstream does, so re-applying an EDID still makes a host re-detect its display.
 - **Why:** a host with several displays rearranges them on every hot-plug. Seen on a Mac mini with a second monitor:
   after an app restart its full-screen spaces moved and the JetKVM's absolute pointer was bound to the other monitor
   until USB re-enumerated. With the fix a restart leaves the host alone; video resumes within 2 s instead of after a

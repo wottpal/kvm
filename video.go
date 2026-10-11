@@ -107,19 +107,6 @@ func setHostDisplayAdvertisedLocked(enabled bool, reason string, force bool) err
 		edid = configuredVideoEDID()
 	}
 
-	// Writing the EDID pulses HDMI hot-plug, and a host with several displays
-	// then rearranges them (a Mac may move windows and spaces, or bind the
-	// absolute pointer to another display). A forced rewrite after the native
-	// process (re)started is only needed if the bridge lost the EDID; skip it
-	// when the bridge still has it.
-	if force && enabled {
-		if current, err := nativeInstance.VideoGetEDID(); err == nil && strings.EqualFold(current, edid) {
-			hostDisplayAdvertised = true
-			nativeLogger.Info().Str("reason", reason).Msg("host display advertisement kept: the bridge already has this EDID")
-			return nil
-		}
-	}
-
 	if err := nativeInstance.VideoSetEDID(edid); err != nil {
 		nativeLogger.Warn().Err(err).Bool("advertised", enabled).Str("reason", reason).Msg("failed to update host display advertisement")
 		return err
@@ -140,6 +127,27 @@ func applyHostDisplayAdvertisement(reason string) error {
 // boolean is unchanged; use it when native state or configured EDID changed.
 func reapplyHostDisplayAdvertisement(reason string) error {
 	return updateHostDisplayAdvertisement(reason, true)
+}
+
+// restoreHostDisplayAdvertisement re-applies the advertisement after the
+// native process (re)started. Writing the EDID pulses HDMI hot-plug, and a
+// host with several displays then rearranges them (a Mac may move windows and
+// spaces, or bind the absolute pointer to another display). The bridge keeps
+// its EDID across a native restart, so the write is skipped when it still has
+// it. Explicit changes (setEDID) always write, and re-plug, as upstream does.
+func restoreHostDisplayAdvertisement(reason string) error {
+	hostDisplayAdvertiseLock.Lock()
+	defer hostDisplayAdvertiseLock.Unlock()
+
+	enabled := shouldAdvertiseHostDisplayLocked()
+	if enabled {
+		if current, err := nativeInstance.VideoGetEDID(); err == nil && strings.EqualFold(current, configuredVideoEDID()) {
+			hostDisplayAdvertised = true
+			nativeLogger.Info().Str("reason", reason).Msg("host display advertisement kept: the bridge already has this EDID")
+			return nil
+		}
+	}
+	return setHostDisplayAdvertisedLocked(enabled, reason, true)
 }
 
 func updateHostDisplayAdvertisement(reason string, force bool) error {

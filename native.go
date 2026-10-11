@@ -34,7 +34,8 @@ func initNative(systemVersion *semver.Version, appVersion *semver.Version) {
 		MaxRestartAttempts:   config.NativeMaxRestart,
 		OnNativeRestart: func() {
 			configureDisplayOnNativeRestart()
-			_ = reapplyHostDisplayAdvertisement("native_restarted")
+			recordEncoderDefaults()
+			_ = restoreHostDisplayAdvertisement("native_restarted")
 		},
 		OnVideoStateChange: func(state native.VideoState) {
 			lastVideoState = state
@@ -99,8 +100,9 @@ func initNative(systemVersion *semver.Version, appVersion *semver.Version) {
 		nativeLogger.Fatal().Err(err).Msg("failed to start native proxy")
 	}
 	go runKeyframeRequester()
+	recordEncoderDefaults()
 	go func() {
-		_ = reapplyHostDisplayAdvertisement("native_started")
+		_ = restoreHostDisplayAdvertisement("native_started")
 	}()
 
 	if os.Getenv("JETKVM_CRASH_TESTING") == "1" {
