@@ -1,0 +1,24 @@
+name: fork-checks
+on:
+  push:
+    branches: [dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Divergence audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Fetch upstream dev
+        run: |
+          git remote add upstream https://github.com/jetkvm/kvm.git
+          git fetch --no-tags upstream dev
+      - name: Audit FORK.md against upstream
+        run: python3 scripts/fork/audit_divergence.py --upstream-ref upstream/dev
