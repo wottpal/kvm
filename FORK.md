@@ -229,6 +229,23 @@ It skips HTML comments and fenced code blocks.
   instead of 87 KB (default parameters) and 165 KB instead of 136 KB (minimum QP 10).
 - **Remove when:** upstream refines still screens.
 
+### D08 — No HDMI re-plug when the app restarts
+
+- **Since:** 2026-10-11
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `video.go`
+- **What:** each time the native process starts (app start, update, crash recovery), upstream rewrites the EDID
+  (`reapplyHostDisplayAdvertisement("native_started")`, since upstream #1476), and every EDID write pulses HDMI
+  hot-plug. The fork reads the bridge's EDID first and skips the write when it already matches; a different or
+  missing EDID is still written.
+- **Why:** a host with several displays rearranges them on every hot-plug. Seen on a Mac mini with a second monitor:
+  after an app restart its full-screen spaces moved and the JetKVM's absolute pointer was bound to the other monitor
+  until USB re-enumerated. With the fix a restart leaves the host alone; video resumes within 2 s instead of after a
+  re-detection of over 10 s.
+- **Remove when:** upstream skips unchanged EDID writes.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
