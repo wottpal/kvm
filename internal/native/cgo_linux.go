@@ -179,6 +179,58 @@ func videoRequestKeyframe() error {
 	return nil
 }
 
+func videoGetEncoderStatus() VideoEncoderStatus {
+	cgoLock.Lock()
+	defer cgoLock.Unlock()
+
+	var s C.jetkvm_venc_status_t
+	C.jetkvm_video_get_encoder_status(&s)
+	return VideoEncoderStatus{
+		VideoEncoderParams: VideoEncoderParams{
+			MinQP:          int(s.params.min_qp),
+			MaxQP:          int(s.params.max_qp),
+			GOPSeconds:     float64(s.params.gop_seconds),
+			AQ:             bool(s.params.aq),
+			MaxFPS:         int(s.params.max_fps),
+			BitrateKbps:    int(s.params.bitrate_kbps),
+			MaxBitrateKbps: int(s.params.max_bitrate_kbps),
+		},
+		SourceFPS:               int(s.source_fps),
+		EncodeFPS:               int(s.encode_fps),
+		GOPFrames:               int(s.gop_frames),
+		EffectiveBitrateKbps:    int(s.effective_bitrate_kbps),
+		EffectiveMaxBitrateKbps: int(s.effective_max_bitrate_kbps),
+		Codec:                   videoCodecName(int(s.codec)),
+		Streaming:               bool(s.streaming),
+	}
+}
+
+func videoSetEncoderParams(params VideoEncoderParams) error {
+	cgoLock.Lock()
+	defer cgoLock.Unlock()
+
+	cParams := C.jetkvm_venc_params_t{
+		min_qp:           C.int(params.MinQP),
+		max_qp:           C.int(params.MaxQP),
+		gop_seconds:      C.double(params.GOPSeconds),
+		aq:               C.bool(params.AQ),
+		max_fps:          C.int(params.MaxFPS),
+		bitrate_kbps:     C.int(params.BitrateKbps),
+		max_bitrate_kbps: C.int(params.MaxBitrateKbps),
+	}
+	if ret := C.jetkvm_video_set_encoder_params(&cParams); ret != 0 {
+		return fmt.Errorf("failed to set encoder params: %d", ret)
+	}
+	return nil
+}
+
+func videoResetEncoderParams() {
+	cgoLock.Lock()
+	defer cgoLock.Unlock()
+
+	C.jetkvm_video_reset_encoder_params()
+}
+
 func videoGetStreamingStatus() VideoStreamingStatus {
 	cgoLock.Lock()
 	defer cgoLock.Unlock()

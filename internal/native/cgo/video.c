@@ -144,19 +144,30 @@ static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
     video_signal->matrix_coefficients = 6; // BT.601 (SMPTE 170M), as converted by the bridge
 }
 
-// Encoder tunables: compiled defaults, overridable via env (read once in
-// video_init; inherited by the native subprocess).
+// Encoder tunables. Defaults are compiled in, overridable via env (read once in
+// video_init; inherited by the native subprocess); video_set_encoder_params()
+// replaces them at runtime (in memory only), live where rockit allows it.
+// video_reset_encoder_params() returns to the defaults when the last session
+// ends and on quality-factor changes, so overrides never outlive a client.
 //
 // A static desktop at a low QP makes every IDR large (~150-350 KiB at 1080p),
 // so a short GOP resends it several times a second. Default to a long GOP and
 // rely on on-demand IDRs (video_request_keyframe) for new sessions and
 // receiver PLI/FIR.
-static jetkvm_venc_params_t venc_params = {
-    .min_qp = 18,
-    .max_qp = 42,
-    .gop_seconds = 4.0,
-    .aq = false,
-};
+#define VENC_PARAMS_COMPILED_DEFAULTS \
+    {                                 \
+        .min_qp = 18,                 \
+        .max_qp = 42,                 \
+        .gop_seconds = 4.0,           \
+        .aq = false,                  \
+        .max_fps = 0,                 \
+        .bitrate_kbps = 0,            \
+        .max_bitrate_kbps = 0,        \
+    }
+static jetkvm_venc_params_t venc_params = VENC_PARAMS_COMPILED_DEFAULTS;
+// Compiled defaults with env overrides applied (venc_params_load_env).
+static jetkvm_venc_params_t venc_params_defaults = VENC_PARAMS_COMPILED_DEFAULTS;
+static pthread_mutex_t venc_params_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static RK_U32 env_u32(const char *name, RK_U32 def, RK_U32 lo, RK_U32 hi)
 {
@@ -200,6 +211,33 @@ static void venc_params_load_env(void)
     p->max_qp = env_u32("JETKVM_VENC_MAX_QP", p->max_qp > p->min_qp ? p->max_qp : p->min_qp, p->min_qp, 51);
     p->gop_seconds = env_gop_seconds(p->gop_seconds);
     p->aq = env_u32("JETKVM_VENC_AQ", p->aq, 0, 1) == 1;
+    p->max_fps = env_u32("JETKVM_VENC_MAX_FPS", p->max_fps, 0, 120);
+    venc_params_defaults = *p;
+}
+
+static jetkvm_venc_params_t venc_get_params(void)
+{
+    pthread_mutex_lock(&venc_params_mutex);
+    jetkvm_venc_params_t p = venc_params;
+    pthread_mutex_unlock(&venc_params_mutex);
+    return p;
+}
+
+static bool venc_params_valid(const jetkvm_venc_params_t *p)
+{
+    return p->min_qp >= 8 && p->min_qp <= 40 &&
+           p->max_qp >= p->min_qp && p->max_qp <= 51 &&
+           p->gop_seconds >= 0.5 && p->gop_seconds <= 60.0 &&
+           p->max_fps >= 0 && p->max_fps <= 120 &&
+           (p->bitrate_kbps == 0 || (p->bitrate_kbps >= 100 && p->bitrate_kbps <= 50000)) &&
+           (p->max_bitrate_kbps == 0 || (p->max_bitrate_kbps >= 100 && p->max_bitrate_kbps <= 50000)) &&
+           (p->bitrate_kbps == 0 || p->max_bitrate_kbps == 0 || p->max_bitrate_kbps >= p->bitrate_kbps);
+}
+
+// Frames per second actually encoded: the source rate, capped by max_fps.
+static RK_U32 venc_encode_fps(RK_U32 source_fps, int max_fps)
+{
+    return max_fps > 0 && (RK_U32)max_fps < source_fps ? (RK_U32)max_fps : source_fps;
 }
 
 static RK_U32 venc_gop_frames(RK_U32 fps, double seconds)
@@ -211,6 +249,20 @@ static RK_U32 venc_gop_frames(RK_U32 fps, double seconds)
     // Truncation keeps 0.5 s identical to the upstream fps / 2.
     RK_U32 gop = (RK_U32)(fps * seconds);
     return gop < 1 ? 1 : gop;
+}
+
+// Target/max in kbps: explicit overrides, else derived from the quality
+// factor (overrides are cleared by video_set_quality_factor).
+static void venc_bitrates(const jetkvm_venc_params_t *p, RK_U32 width, RK_U32 height,
+                          RK_U32 *bitrate, RK_U32 *max_bitrate)
+{
+    *bitrate = p->bitrate_kbps > 0 ? (RK_U32)p->bitrate_kbps
+                                   : (RK_U32)calculate_bitrate(quality_factor, width, height);
+    *max_bitrate = p->max_bitrate_kbps > 0 ? (RK_U32)p->max_bitrate_kbps : *bitrate * 3 / 2;
+    if (*max_bitrate < *bitrate)
+    {
+        *max_bitrate = *bitrate;
+    }
 }
 
 static void venc_set_rc_attr(VENC_CHN_ATTR_S *stAttr, bool hevc, RK_U32 bitrate, RK_U32 max_bitrate, RK_U32 fps, RK_U32 gop)
@@ -325,9 +377,9 @@ static void venc_configure_limited_range_vui(void)
 // Rockchip defaults pin the frame-level QP floor at ~26-28 and apply
 // texture-adaptive QP (up to +8 on high-texture blocks, i.e. text), so desktop
 // text stays soft at any bitrate. Lower the floor and flatten AQ so the VBR
-// bitrate target decides quality. Used at channel creation;
-// returns false if any step failed (logged as error: the native process logs
-// at ERROR by default).
+// bitrate target decides quality. Used at channel creation and for live
+// updates; returns false if any step failed (logged as error: the native
+// process logs at ERROR by default).
 static VENC_RC_PARAM2_S venc_default_rc2; // Rockchip AQ defaults of the channel
 static bool venc_default_rc2_valid = false;
 
@@ -410,15 +462,20 @@ static void venc_configure_super_frame(void)
 pthread_t *venc_read_thread = NULL;
 volatile bool venc_running = false;
 // Guards venc_running and venc_live. Held across channel creation and every
-// call that touches the running channel from another thread (IDR requests),
-// so none of them races RK_MPI_VENC_DestroyChn.
+// call that touches the running channel from another thread (IDR requests,
+// live parameter updates), so none of them races RK_MPI_VENC_DestroyChn and a
+// parameter change either precedes the creation snapshot or is applied live.
 static pthread_mutex_t venc_state_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // What the running channel is configured with.
 static struct
 {
+    jetkvm_venc_params_t params;
     bool hevc;
-    RK_U32 encode_fps;
+    RK_U32 width;
+    RK_U32 height;
+    RK_U32 source_fps;
+    volatile RK_U32 encode_fps; // also read lock-free by the capture loop
     RK_U32 gop;       // nominal GOP length
     RK_U32 gop_nudge; // 0/1 frame added by the keyframe GOP-nudge fallback
     RK_U32 bitrate;
@@ -432,32 +489,38 @@ static void venc_set_running(bool running)
     pthread_mutex_unlock(&venc_state_mutex);
 }
 
-static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, int32_t height, int32_t fps)
+static int32_t venc_start(RK_U32 width, RK_U32 height, RK_U32 source_fps)
 {
     int32_t ret;
     VENC_CHN_ATTR_S stAttr;
 
     pthread_mutex_lock(&venc_state_mutex);
+    const jetkvm_venc_params_t params = venc_get_params();
+    venc_live.params = params;
     venc_live.hevc = codec_type == 1;
-    venc_live.encode_fps = fps;
-    venc_live.gop = venc_gop_frames(fps, venc_params.gop_seconds);
+    venc_live.width = width;
+    venc_live.height = height;
+    venc_live.source_fps = source_fps;
+    venc_live.encode_fps = venc_encode_fps(source_fps, params.max_fps);
+    venc_live.gop = venc_gop_frames(venc_live.encode_fps, params.gop_seconds);
     venc_live.gop_nudge = 0;
-    venc_live.bitrate = bitrate;
-    venc_live.max_bitrate = max_bitrate;
+    venc_bitrates(&params, width, height, &venc_live.bitrate, &venc_live.max_bitrate);
 
-    populate_venc_attr(&stAttr, bitrate, max_bitrate, width, height, fps, venc_live.gop);
+    populate_venc_attr(&stAttr, venc_live.bitrate, venc_live.max_bitrate, width, height,
+                       venc_live.encode_fps, venc_live.gop);
     ret = RK_MPI_VENC_CreateChn(VENC_CHANNEL, &stAttr);
     if (ret != RK_SUCCESS)
     {
         RK_LOGE("error RK_MPI_VENC_CreateChn, %d", ret);
         goto out;
     }
-    log_notice("configured VENC GOP: %u frames (%.1f s at %u fps), bitrate %u kbps (max %u)",
-               venc_live.gop, venc_params.gop_seconds, venc_live.encode_fps, venc_live.bitrate, venc_live.max_bitrate);
+    log_notice("configured VENC GOP: %u frames (%.1f s at %u of %u fps), bitrate %u kbps (max %u)",
+               venc_live.gop, params.gop_seconds, venc_live.encode_fps, source_fps,
+               venc_live.bitrate, venc_live.max_bitrate);
 
     venc_configure_limited_range_vui();
     venc_default_rc2_valid = RK_MPI_VENC_GetRcParam2(VENC_CHANNEL, &venc_default_rc2) == RK_SUCCESS;
-    venc_configure_rc_for_desktop(&venc_params, venc_live.hevc);
+    venc_configure_rc_for_desktop(&params, venc_live.hevc);
     venc_configure_super_frame();
 
     VENC_RECV_PIC_PARAM_S stRecvParam;
@@ -486,6 +549,55 @@ out:
     }
 
     return RK_SUCCESS;
+}
+
+// Applies p to the running channel without recreating it; caller holds
+// venc_state_mutex with venc_running set. Bitrate/QP/AQ changes leave the GOP
+// alone; a frame-rate or GOP-length change makes MPP (under rockit) resend
+// SPS/PPS with an IDR (mpp_enc_proc_rc_cfg -> enc_set_resend_hdr). Returns
+// false on any failure so the caller can fall back to a stream restart.
+static bool venc_apply_live_locked(const jetkvm_venc_params_t *p)
+{
+    const RK_U32 encode_fps = venc_encode_fps(venc_live.source_fps, p->max_fps);
+    const RK_U32 gop = venc_gop_frames(encode_fps, p->gop_seconds);
+    RK_U32 bitrate, max_bitrate;
+    venc_bitrates(p, venc_live.width, venc_live.height, &bitrate, &max_bitrate);
+
+    if (bitrate != venc_live.bitrate || max_bitrate != venc_live.max_bitrate ||
+        encode_fps != venc_live.encode_fps || gop != venc_live.gop)
+    {
+        VENC_CHN_ATTR_S stAttr;
+        memset(&stAttr, 0, sizeof(stAttr));
+        int32_t ret = RK_MPI_VENC_GetChnAttr(VENC_CHANNEL, &stAttr);
+        if (ret == RK_SUCCESS)
+        {
+            venc_set_rc_attr(&stAttr, venc_live.hevc, bitrate, max_bitrate, encode_fps, gop + venc_live.gop_nudge);
+            ret = RK_MPI_VENC_SetChnAttr(VENC_CHANNEL, &stAttr);
+        }
+        if (ret != RK_SUCCESS)
+        {
+            log_error("live VENC rate update failed: %#x", ret);
+            return false;
+        }
+        venc_live.bitrate = bitrate;
+        venc_live.max_bitrate = max_bitrate;
+        venc_live.gop = gop;
+        venc_live.encode_fps = encode_fps;
+    }
+
+    if (p->min_qp != venc_live.params.min_qp || p->max_qp != venc_live.params.max_qp ||
+        p->aq != venc_live.params.aq)
+    {
+        if (!venc_configure_rc_for_desktop(p, venc_live.hevc))
+        {
+            return false;
+        }
+    }
+
+    venc_live.params = *p;
+    log_notice("applied VENC params live: gop %u frames (%.1f s at %u of %u fps), bitrate %u kbps (max %u)",
+               gop, p->gop_seconds, encode_fps, venc_live.source_fps, bitrate, max_bitrate);
+    return true;
 }
 
 static int32_t venc_stop()
@@ -1081,8 +1193,7 @@ void *run_video_stream(void *arg)
         struct v4l2_plane tmp_plane;
 
         // Set VENC parameters
-        int32_t bitrate = calculate_bitrate(quality_factor, width, height);
-        RK_S32 ret = venc_start(bitrate, bitrate * 3 / 2, width, height, fps);
+        RK_S32 ret = venc_start(width, height, fps);
         if (ret != RK_SUCCESS)
         {
             log_error("Set VENC parameters failed with %#x", ret);
@@ -1093,6 +1204,7 @@ void *run_video_stream(void *arg)
         struct timeval tv;
         int r;
         uint32_t num = 0;
+        uint32_t frame_credit = 0;
         VIDEO_FRAME_INFO_S stFrame;
         memset(&stFrame, 0, sizeof(VIDEO_FRAME_INFO_S));
         stFrame.stVFrame.u32Width = width;
@@ -1140,6 +1252,18 @@ void *run_video_stream(void *arg)
                 break;
             }
             log_trace("got frame, bytesused = %d", tmp_plane.bytesused);
+            // Drop frames evenly to encode encode_fps of fps. Done here rather
+            // than via the VENC dst frame rate, whose drop behaviour rockit
+            // does not document; the encoder is configured for encode_fps.
+            // encode_fps can change live (venc_apply_live_locked).
+            frame_credit += venc_live.encode_fps;
+            if (frame_credit < fps)
+            {
+                if (ioctl(video_dev_fd, VIDIOC_QBUF, &buf) < 0)
+                    log_error("failure VIDIOC_QBUF: %s", strerror(errno));
+                continue;
+            }
+            frame_credit -= fps;
             MB_BLK blk = RK_MPI_MMZ_Fd2Handle(tmp_plane.m.fd);
             assert(blk != RK_NULL);
             stFrame.stVFrame.pMbBlk = blk;
@@ -1431,9 +1555,32 @@ exit:
 }
 
 
+// Drops runtime overrides (video_set_encoder_params). Applies at the next
+// channel start; callers stop or restart the stream right after.
+void video_reset_encoder_params(void)
+{
+    pthread_mutex_lock(&venc_params_mutex);
+    const jetkvm_venc_params_t *d = &venc_params_defaults;
+    const jetkvm_venc_params_t *p = &venc_params;
+    const bool changed = p->min_qp != d->min_qp || p->max_qp != d->max_qp ||
+                         p->gop_seconds != d->gop_seconds || p->aq != d->aq ||
+                         p->max_fps != d->max_fps || p->bitrate_kbps != d->bitrate_kbps ||
+                         p->max_bitrate_kbps != d->max_bitrate_kbps;
+    venc_params = venc_params_defaults;
+    pthread_mutex_unlock(&venc_params_mutex);
+    if (changed)
+    {
+        log_notice("encoder params reset to defaults");
+    }
+}
+
 void video_set_quality_factor(float factor)
 {
     quality_factor = factor;
+
+    // A quality change from the UI should take full effect: drop any runtime
+    // overrides a client's quality governor left behind.
+    video_reset_encoder_params();
 
     // TODO: update venc bitrate without stopping streaming
     video_restart_streaming();
@@ -1441,6 +1588,50 @@ void video_set_quality_factor(float factor)
 
 float video_get_quality_factor() {
     return quality_factor;
+}
+
+int video_set_encoder_params(const jetkvm_venc_params_t *params)
+{
+    if (params == NULL || !venc_params_valid(params))
+    {
+        return -1;
+    }
+
+    pthread_mutex_lock(&venc_state_mutex);
+    pthread_mutex_lock(&venc_params_mutex);
+    venc_params = *params;
+    pthread_mutex_unlock(&venc_params_mutex);
+    log_notice("encoder params set: qp %d-%d, gop %.1f s, aq %s, max fps %d, bitrate %d/%d kbps (0 = auto)",
+               params->min_qp, params->max_qp, params->gop_seconds,
+               params->aq ? "rockchip default" : "off", params->max_fps,
+               params->bitrate_kbps, params->max_bitrate_kbps);
+    // No running channel: the next venc_start() picks the values up.
+    const bool applied = !venc_running || venc_apply_live_locked(params);
+    pthread_mutex_unlock(&venc_state_mutex);
+
+    if (!applied)
+    {
+        // Same path as video_set_quality_factor: restarts capture + VENC
+        // only; EDID and HDMI hot-plug are untouched.
+        log_notice("live VENC update failed, restarting the stream");
+        video_restart_streaming();
+    }
+    return 0;
+}
+
+void video_get_encoder_status(jetkvm_venc_status_t *status)
+{
+    memset(status, 0, sizeof(*status));
+    status->params = venc_get_params();
+    status->source_fps = detected_fps;
+    status->encode_fps = venc_encode_fps(detected_fps, status->params.max_fps);
+    status->gop_frames = venc_gop_frames(status->encode_fps, status->params.gop_seconds);
+    RK_U32 bitrate, max_bitrate;
+    venc_bitrates(&status->params, detected_width, detected_height, &bitrate, &max_bitrate);
+    status->effective_bitrate_kbps = bitrate;
+    status->effective_max_bitrate_kbps = max_bitrate;
+    status->codec = codec_type;
+    status->streaming = video_get_streaming_status() == 1;
 }
 
 void video_set_codec_type(int type) {

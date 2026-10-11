@@ -23,6 +23,8 @@ service NativeService {
   rpc VideoStop(Empty) returns (Empty);
   rpc VideoStart(Empty) returns (Empty);
   rpc VideoRequestKeyframe(Empty) returns (Empty);
+  rpc VideoGetEncoderParams(Empty) returns (VideoEncoderStatus);
+  rpc VideoSetEncoderParams(VideoEncoderParams) returns (Empty);
 
   // UI methods
   rpc GetLVGLVersion(Empty) returns (GetLVGLVersionResponse);
@@ -265,4 +267,25 @@ message Event {
 message VideoFrame {
   bytes frame = 1;
   int64 duration_ns = 2;
+}
+
+message VideoEncoderParams {
+  int32 min_qp = 1;
+  int32 max_qp = 2;
+  double gop_seconds = 3;
+  bool aq = 4;
+  int32 max_fps = 5;
+  int32 bitrate_kbps = 6;
+  int32 max_bitrate_kbps = 7;
+}
+
+message VideoEncoderStatus {
+  VideoEncoderParams params = 1;
+  int32 source_fps = 2;
+  int32 encode_fps = 3;
+  int32 gop_frames = 4;
+  int32 effective_bitrate_kbps = 5;
+  int32 effective_max_bitrate_kbps = 6;
+  string codec = 7;
+  bool streaming = 8;
 }

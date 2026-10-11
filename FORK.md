@@ -151,6 +151,46 @@ It skips HTML comments and fenced code blocks.
   bitrate: 32.5 dB on a test image, against 46.4 dB at the QP 18 floor.
 - **Remove when:** upstream configures rate control for desktop content.
 
+### D06 — Runtime encoder control
+
+- **Since:** 2026-10-11
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `jsonrpc.go`
+  - `internal/native/cgo/ctrl.c`
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/cgo/video.c`
+  - `internal/native/cgo_linux.go`
+  - `internal/native/cgo_notlinux.go`
+  - `internal/native/empty.go`
+  - `internal/native/encoder_params.go`
+  - `internal/native/grpc_clientmethods.go`
+  - `internal/native/grpc_servermethods.go`
+  - `internal/native/interface.go`
+  - `internal/native/proxy.go`
+  - `internal/native/video.go`
+  - `internal/native/proto/native.proto`
+  - `internal/native/proto/native.pb.go`
+  - `internal/native/proto/native_grpc.pb.go`
+- **What:** two JSON-RPC methods let a client tune the encoder while it streams:
+  - `getVideoEncoderParams` returns the status object below.
+  - `setVideoEncoderParams {"params": {...}}` merges a partial update (omitted fields keep their value), validates the
+    result as a whole (an invalid one changes nothing) and returns the new status. Fields: `minQp` (8–40), `maxQp`
+    (`minQp`–51), `gopSeconds`, `aq`, `maxFps` (0 = source rate, up to 120), `bitrateKbps` and `maxBitrateKbps`
+    (100–50,000; 0 = derived from the quality factor, max 1.5× the target).
+  - Bitrate, QP and AQ apply to the running channel without a keyframe; frame rate and GOP apply live and cost one
+    keyframe. If a live change fails, the stream restarts the way a quality-factor change does (capture and encoder
+    only; EDID and HDMI hot-plug are untouched).
+  - `maxFps` drops captured frames evenly before the encoder.
+  - Overrides live in memory only. They reset to the defaults (D05, env included) when the stream stops (the last
+    session leaves, or a session pauses it) and when the stream quality factor changes.
+  - Status object: the parameters, plus `sourceFps`, `encodeFps`, `gopFrames`, `effectiveBitrateKbps`,
+    `effectiveMaxBitrateKbps`, `codec` and `streaming`.
+- **Why:** the JetKVM Desktop app adapts quality to the network (frame rate, bitrate, QP floor) without re-plugging
+  HDMI or restarting the stream.
+- **Remove when:** upstream offers equivalent runtime control.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -232,4 +272,5 @@ copy files with `ssh ... "cat > file" < file`.
 - **Firmware:** install upstream's `jetkvm_app` the same way (the backup, or the release binary with its `.sha256`
   and `.sig`). The fork persists nothing of its own (encoder overrides live in memory, no configuration keys are
   added), so the stock app starts from the same configuration.
-- **D04:** clients that call `requestKeyframe` get "method not found" from stock firmware.
+- **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
+  "method not found" from stock firmware; the JetKVM Desktop app then falls back to the stream quality factor.

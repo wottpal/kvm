@@ -210,12 +210,16 @@ func (n *Native) VideoLogStatus() (string, error) {
 	return videoLogStatus(), nil
 }
 
-// VideoStop stops the video stream.
+// VideoStop stops the video stream. The main process issues it when the last
+// WebRTC session disconnects and when a session pauses the stream, so runtime
+// encoder overrides (VideoSetEncoderParams) are dropped here: the next start
+// uses the env/compiled defaults, and a client that paused re-applies its own.
 func (n *Native) VideoStop() error {
 	n.videoLock.Lock()
 	defer n.videoLock.Unlock()
 
 	videoStop()
+	videoResetEncoderParams()
 	return nil
 }
 
@@ -246,6 +250,24 @@ func (n *Native) VideoStart() error {
 // C side orders the request against encoder teardown itself.
 func (n *Native) VideoRequestKeyframe() error {
 	return videoRequestKeyframe()
+}
+
+// VideoGetEncoderParams reports the effective encoder configuration.
+func (n *Native) VideoGetEncoderParams() (VideoEncoderStatus, error) {
+	return videoGetEncoderStatus(), nil
+}
+
+// VideoSetEncoderParams replaces the encoder tunables (in memory) and applies
+// them to the running channel, falling back to the VideoSetQualityFactor
+// restart path (capture + VENC only, no EDID/hot-plug) if that fails.
+func (n *Native) VideoSetEncoderParams(params VideoEncoderParams) error {
+	if err := params.Validate(); err != nil {
+		return err
+	}
+	n.videoLock.Lock()
+	defer n.videoLock.Unlock()
+
+	return videoSetEncoderParams(params)
 }
 
 // VideoGetStreamingStatus gets the streaming status of the video.

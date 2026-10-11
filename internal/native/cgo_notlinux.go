@@ -138,6 +138,20 @@ func videoRequestKeyframe() error {
 	return nil
 }
 
+func videoGetEncoderStatus() VideoEncoderStatus {
+	panicPlatformNotSupported()
+	return VideoEncoderStatus{}
+}
+
+func videoSetEncoderParams(params VideoEncoderParams) error {
+	panicPlatformNotSupported()
+	return nil
+}
+
+func videoResetEncoderParams() {
+	panicPlatformNotSupported()
+}
+
 func videoGetStreamingStatus() VideoStreamingStatus {
 	panicPlatformNotSupported()
 	return VideoStreamingStatusInactive
