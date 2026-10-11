@@ -126,6 +126,31 @@ It skips HTML comments and fenced code blocks.
   GOP bounds that by resending a full keyframe twice a second, which a long GOP cannot afford.
 - **Remove when:** upstream answers PLI/FIR with keyframes.
 
+### D05 — Encoder tuned for desktop content
+
+- **Since:** 2026-10-11
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/cgo/log.h`
+  - `internal/native/cgo/video.c`
+  - `internal/native/chan.go`
+- **What:**
+  - **QP range 18–42** (keyframes up to 40) and **texture-adaptive QP off**: AQ steps and row QP deltas are zeroed,
+    so the bitrate target decides quality uniformly.
+  - **GOP 4 s** instead of 0.5 s; keyframes come on demand (D04).
+  - **Super-frame re-encode** of any frame above 800 KiB, below the 1,036,800-byte frame limit of
+    `internal/native/proxy.go`, which would otherwise end the stream.
+  - Env overrides, read once when the native process starts: `JETKVM_VENC_MIN_QP` (8–40), `JETKVM_VENC_MAX_QP`,
+    `JETKVM_VENC_GOP_SECONDS` (0.5–60) and `JETKVM_VENC_AQ` (0/1).
+  - `log_notice` is always emitted (rendered as info, whatever the native log level), and the encoder's configuration
+    lines use it, so the active settings are visible in every log.
+- **Why:** upstream never sets rate-control parameters, so Rockchip's defaults apply: a frame-level QP floor of about
+  26–28 plus up to +8 on high-texture blocks, which is exactly where text is. Text stayed at QP 32–36 whatever the
+  bitrate: 32.5 dB on a test image, against 46.4 dB at the QP 18 floor.
+- **Remove when:** upstream configures rate control for desktop content.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

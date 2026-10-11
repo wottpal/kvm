@@ -5,6 +5,7 @@
 #include <rk_mpi_venc.h>
 #include <rk_mpi_sys.h>
 #include <string.h>
+#include <stdlib.h>
 #include <rk_debug.h>
 #include <malloc.h>
 #include <stdbool.h>
@@ -143,6 +144,75 @@ static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
     video_signal->matrix_coefficients = 6; // BT.601 (SMPTE 170M), as converted by the bridge
 }
 
+// Encoder tunables: compiled defaults, overridable via env (read once in
+// video_init; inherited by the native subprocess).
+//
+// A static desktop at a low QP makes every IDR large (~150-350 KiB at 1080p),
+// so a short GOP resends it several times a second. Default to a long GOP and
+// rely on on-demand IDRs (video_request_keyframe) for new sessions and
+// receiver PLI/FIR.
+static jetkvm_venc_params_t venc_params = {
+    .min_qp = 18,
+    .max_qp = 42,
+    .gop_seconds = 4.0,
+    .aq = false,
+};
+
+static RK_U32 env_u32(const char *name, RK_U32 def, RK_U32 lo, RK_U32 hi)
+{
+    const char *s = getenv(name);
+    if (s == NULL || *s == '\0')
+    {
+        return def;
+    }
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 10);
+    if (*end != '\0' || v < lo || v > hi)
+    {
+        log_notice("ignoring invalid %s=%.32s", name, s);
+        return def;
+    }
+    return (RK_U32)v;
+}
+
+// An invalid JETKVM_VENC_GOP_SECONDS falls back to the upstream 0.5 s cadence.
+static double env_gop_seconds(double def)
+{
+    const char *s = getenv("JETKVM_VENC_GOP_SECONDS");
+    if (s == NULL || *s == '\0')
+    {
+        return def;
+    }
+    char *end = NULL;
+    double seconds = strtod(s, &end);
+    if (*end != '\0' || !(seconds >= 0.5 && seconds <= 60.0))
+    {
+        log_notice("ignoring invalid JETKVM_VENC_GOP_SECONDS=%.32s, using 0.5", s);
+        return 0.5;
+    }
+    return seconds;
+}
+
+static void venc_params_load_env(void)
+{
+    jetkvm_venc_params_t *p = &venc_params;
+    p->min_qp = env_u32("JETKVM_VENC_MIN_QP", p->min_qp, 8, 40);
+    p->max_qp = env_u32("JETKVM_VENC_MAX_QP", p->max_qp > p->min_qp ? p->max_qp : p->min_qp, p->min_qp, 51);
+    p->gop_seconds = env_gop_seconds(p->gop_seconds);
+    p->aq = env_u32("JETKVM_VENC_AQ", p->aq, 0, 1) == 1;
+}
+
+static RK_U32 venc_gop_frames(RK_U32 fps, double seconds)
+{
+    if (fps == 0)
+    {
+        return 30;
+    }
+    // Truncation keeps 0.5 s identical to the upstream fps / 2.
+    RK_U32 gop = (RK_U32)(fps * seconds);
+    return gop < 1 ? 1 : gop;
+}
+
 static void venc_set_rc_attr(VENC_CHN_ATTR_S *stAttr, bool hevc, RK_U32 bitrate, RK_U32 max_bitrate, RK_U32 fps, RK_U32 gop)
 {
     RK_U32 min_bitrate = bitrate / 2;
@@ -232,7 +302,109 @@ static void venc_configure_limited_range_vui(void)
         }
     }
 
-    log_info("configured VENC VUI as limited-range, BT.601 matrix, BT.709 primaries/transfer");
+    log_notice("configured VENC VUI as limited-range, BT.601 matrix, BT.709 primaries/transfer");
+}
+
+// Re-encode any frame above this size so it never trips the 1,036,800-byte
+// maxFrameSize check in internal/native/proxy.go (which kills the stream).
+#define VENC_SUPER_FRAME_BITS (800u * 1024u * 8u)
+
+#define VENC_APPLY_QP_LIMITS(p, min_qp, max_qp, max_iqp) \
+    do                                                   \
+    {                                                    \
+        (p).u32MinQp = (min_qp);                         \
+        (p).u32MinIQp = (min_qp);                        \
+        (p).u32FrmMinQp = (min_qp);                      \
+        (p).u32FrmMinIQp = (min_qp);                     \
+        (p).u32MaxQp = (max_qp);                         \
+        (p).u32FrmMaxQp = (max_qp);                      \
+        (p).u32MaxIQp = (max_iqp);                       \
+        (p).u32FrmMaxIQp = (max_iqp);                    \
+    } while (0)
+
+// Rockchip defaults pin the frame-level QP floor at ~26-28 and apply
+// texture-adaptive QP (up to +8 on high-texture blocks, i.e. text), so desktop
+// text stays soft at any bitrate. Lower the floor and flatten AQ so the VBR
+// bitrate target decides quality. Used at channel creation;
+// returns false if any step failed (logged as error: the native process logs
+// at ERROR by default).
+static VENC_RC_PARAM2_S venc_default_rc2; // Rockchip AQ defaults of the channel
+static bool venc_default_rc2_valid = false;
+
+static bool venc_configure_rc_for_desktop(const jetkvm_venc_params_t *p, bool hevc)
+{
+    const RK_U32 min_qp = p->min_qp;
+    const RK_U32 max_qp = p->max_qp;
+    const RK_U32 max_iqp = max_qp >= min_qp + 2 ? max_qp - 2 : max_qp;
+    bool ok = true;
+    int32_t ret;
+
+    VENC_RC_PARAM_S stRcParam;
+    memset(&stRcParam, 0, sizeof(stRcParam));
+    ret = RK_MPI_VENC_GetRcParam(VENC_CHANNEL, &stRcParam);
+    if (ret == RK_SUCCESS)
+    {
+        if (hevc)
+        {
+            VENC_APPLY_QP_LIMITS(stRcParam.stParamH265, min_qp, max_qp, max_iqp);
+        }
+        else
+        {
+            VENC_APPLY_QP_LIMITS(stRcParam.stParamH264, min_qp, max_qp, max_iqp);
+        }
+        ret = RK_MPI_VENC_SetRcParam(VENC_CHANNEL, &stRcParam);
+    }
+    if (ret != RK_SUCCESS)
+    {
+        log_error("VENC QP limits not applied: %#x", ret);
+        ok = false;
+    }
+
+    if (venc_default_rc2_valid)
+    {
+        VENC_RC_PARAM2_S stRcParam2 = venc_default_rc2;
+        if (!p->aq)
+        {
+            // Zero QP steps => uniform QP per frame; the texture thresholds
+            // (u32ThrdI/P) become irrelevant. Zeroing thresholds instead would
+            // push every block into the top (+8) bucket.
+            memset(stRcParam2.s32AqStepI, 0, sizeof(stRcParam2.s32AqStepI));
+            memset(stRcParam2.s32AqStepP, 0, sizeof(stRcParam2.s32AqStepP));
+            stRcParam2.u32RowQpDelta = 0;
+            stRcParam2.u32RowIQpDelta = 0;
+        }
+        ret = RK_MPI_VENC_SetRcParam2(VENC_CHANNEL, &stRcParam2);
+        if (ret != RK_SUCCESS)
+        {
+            log_error("VENC AQ setting not applied: %#x", ret);
+            ok = false;
+        }
+    }
+    else
+    {
+        log_error("VENC AQ setting not applied: channel defaults unknown");
+        ok = false;
+    }
+
+    log_notice("configured VENC RC: qp %u-%u (I max %u), aq %s%s",
+               min_qp, max_qp, max_iqp, p->aq ? "rockchip default" : "off", ok ? "" : " (with errors)");
+    return ok;
+}
+
+static void venc_configure_super_frame(void)
+{
+    VENC_SUPERFRAME_CFG_S stSuperFrm;
+    memset(&stSuperFrm, 0, sizeof(stSuperFrm));
+    stSuperFrm.enSuperFrmMode = SUPERFRM_REENCODE;
+    stSuperFrm.u32SuperIFrmBitsThr = VENC_SUPER_FRAME_BITS;
+    stSuperFrm.u32SuperPFrmBitsThr = VENC_SUPER_FRAME_BITS;
+    stSuperFrm.u32SuperBFrmBitsThr = VENC_SUPER_FRAME_BITS;
+    stSuperFrm.enRcPriority = VENC_RC_PRIORITY_FRAMEBITS_FIRST;
+    int32_t ret = RK_MPI_VENC_SetSuperFrameStrategy(VENC_CHANNEL, &stSuperFrm);
+    if (ret != RK_SUCCESS)
+    {
+        log_error("RK_MPI_VENC_SetSuperFrameStrategy failed: %#x", ret);
+    }
 }
 
 pthread_t *venc_read_thread = NULL;
@@ -268,10 +440,7 @@ static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, i
     pthread_mutex_lock(&venc_state_mutex);
     venc_live.hevc = codec_type == 1;
     venc_live.encode_fps = fps;
-    // GOP scales with framerate so IDR cadence stays ~0.5s regardless of source
-    // refresh — keeps WebRTC recovery latency bounded at 60 Hz and 120 Hz alike.
-    venc_live.gop = fps > 0 ? fps / 2 : 30;
-    if (venc_live.gop < 1) venc_live.gop = 1;
+    venc_live.gop = venc_gop_frames(fps, venc_params.gop_seconds);
     venc_live.gop_nudge = 0;
     venc_live.bitrate = bitrate;
     venc_live.max_bitrate = max_bitrate;
@@ -283,8 +452,13 @@ static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, i
         RK_LOGE("error RK_MPI_VENC_CreateChn, %d", ret);
         goto out;
     }
+    log_notice("configured VENC GOP: %u frames (%.1f s at %u fps), bitrate %u kbps (max %u)",
+               venc_live.gop, venc_params.gop_seconds, venc_live.encode_fps, venc_live.bitrate, venc_live.max_bitrate);
 
     venc_configure_limited_range_vui();
+    venc_default_rc2_valid = RK_MPI_VENC_GetRcParam2(VENC_CHANNEL, &venc_default_rc2) == RK_SUCCESS;
+    venc_configure_rc_for_desktop(&venc_params, venc_live.hevc);
+    venc_configure_super_frame();
 
     VENC_RECV_PIC_PARAM_S stRecvParam;
     memset(&stRecvParam, 0, sizeof(VENC_RECV_PIC_PARAM_S));
@@ -596,6 +770,7 @@ pthread_t *format_thread = NULL;
 int video_init(float factor)
 {
     detect_sleep_mode();
+    venc_params_load_env();
 
     if (factor <= 0) {
         factor = 1.0f;

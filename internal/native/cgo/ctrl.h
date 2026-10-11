@@ -15,6 +15,15 @@ typedef struct
     double frame_per_second;
 } jetkvm_video_state_t;
 
+// Encoder tunables (video.c: compiled defaults, JETKVM_VENC_* env overrides).
+typedef struct
+{
+    int min_qp;         // 8-40
+    int max_qp;         // min_qp-51
+    double gop_seconds; // 0.5-60
+    bool aq;            // keep Rockchip texture-adaptive QP
+} jetkvm_venc_params_t;
+
 typedef void (jetkvm_video_state_handler_t)(jetkvm_video_state_t *state);
 typedef void (jetkvm_log_handler_t)(int level, const char *filename, const char *funcname, int line, const char *message);
 typedef void (jetkvm_rpc_handler_t)(const char *method, const char *params);
