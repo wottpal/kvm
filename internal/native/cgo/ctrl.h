@@ -25,6 +25,7 @@ typedef struct
     int max_fps;          // 1-120, 0 = source fps
     int bitrate_kbps;     // 100-50000, 0 = derived from the quality factor
     int max_bitrate_kbps; // 100-50000 (>= bitrate_kbps), 0 = 1.5x target
+    int still_qp;         // 1-51: QP of the keyframe that refreshes a still screen (>= min_qp: off)
 } jetkvm_venc_params_t;
 
 typedef struct

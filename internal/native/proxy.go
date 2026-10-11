@@ -24,7 +24,10 @@ import (
 )
 
 const (
-	maxFrameSize                   = 1920 * 1080 / 2
+	// The encoder's output buffer for the largest mode (1920x1200, 2 bytes
+	// per pixel, cgo/video.c): near-lossless still refreshes of a busy screen
+	// exceed the earlier 1920*1080/2.
+	maxFrameSize                   = 1920 * 1200 * 2
 	defaultMaxRestartAttempts uint = 5
 )
 

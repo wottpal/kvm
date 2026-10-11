@@ -194,6 +194,7 @@ func videoGetEncoderStatus() VideoEncoderStatus {
 			MaxFPS:         int(s.params.max_fps),
 			BitrateKbps:    int(s.params.bitrate_kbps),
 			MaxBitrateKbps: int(s.params.max_bitrate_kbps),
+			StillQP:        int(s.params.still_qp),
 		},
 		SourceFPS:               int(s.source_fps),
 		EncodeFPS:               int(s.encode_fps),
@@ -217,6 +218,7 @@ func videoSetEncoderParams(params VideoEncoderParams) error {
 		max_fps:          C.int(params.MaxFPS),
 		bitrate_kbps:     C.int(params.BitrateKbps),
 		max_bitrate_kbps: C.int(params.MaxBitrateKbps),
+		still_qp:         C.int(params.StillQP),
 	}
 	if ret := C.jetkvm_video_set_encoder_params(&cParams); ret != 0 {
 		return fmt.Errorf("failed to set encoder params: %d", ret)
