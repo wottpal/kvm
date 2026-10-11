@@ -69,6 +69,22 @@ It skips HTML comments and fenced code blocks.
   `git fetch upstream dev` (`--staged` audits the index before committing).
 - **Remove when:** never (fork-only).
 
+### D03 — Color signaling matches the HDMI bridge
+
+- **Since:** 2026-10-11
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `internal/native/cgo/video.c`
+- **What:** the stream is tagged with the BT.601 matrix, BT.709 primaries and transfer, limited range, at every
+  resolution: in the H.264/H.265 VUI, the V4L2 capture format and the encoder's frame color gamut. Upstream tags
+  modes above 576 lines as BT.709 throughout.
+- **Why:** the TC358749 bridge converts RGB to BT.601 limited-range YCbCr for the YUV 4:2:2 bus whatever the
+  resolution (`tc35874x_set_csi_color_space()`, `MASK_VOUT_COLOR_601_YCBCR_LIMITED`). Measured against a test image,
+  decoded colors match the BT.601 matrix within 0.5 code values; decoded as BT.709, they are off by about 8. Only the
+  tags change; the conversion is the bridge's.
+- **Remove when:** upstream tags the stream by the bridge's conversion.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
