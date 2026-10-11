@@ -39,6 +39,13 @@ void video_stop_streaming();
 uint8_t video_get_streaming_status();
 
 /**
+ * @brief Ask the running encoder for an IDR frame (no-op when not streaming)
+ *
+ * @return int 0 on success or when not streaming, the rockit error code otherwise
+ */
+int video_request_keyframe();
+
+/**
  * @brief Set the quality factor of the video
  *
  * @param factor The quality factor to set

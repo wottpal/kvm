@@ -606,6 +606,12 @@ func (p *NativeProxy) VideoStart() error {
 	})
 }
 
+func (p *NativeProxy) VideoRequestKeyframe() error {
+	return nativeProxyClientExecWithoutArgument(p, func(client *GRPCClient) error {
+		return client.VideoRequestKeyframe()
+	})
+}
+
 func (p *NativeProxy) GetLVGLVersion() (string, error) {
 	return nativeProxyClientExec[string](p, func(client *GRPCClient) (string, error) {
 		return client.GetLVGLVersion()

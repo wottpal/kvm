@@ -133,6 +133,11 @@ func videoSetEDID(edid string) error {
 	return nil
 }
 
+func videoRequestKeyframe() error {
+	panicPlatformNotSupported()
+	return nil
+}
+
 func videoGetStreamingStatus() VideoStreamingStatus {
 	panicPlatformNotSupported()
 	return VideoStreamingStatusInactive

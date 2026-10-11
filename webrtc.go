@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/rs/zerolog"
 )
@@ -171,17 +172,34 @@ func (s *Session) attachAudioTrack(offerSDP string) error {
 	}
 	s.AudioTrack = track
 	webrtcLogger.Info().Str("codec", audioMime).Msg("audio track enabled")
-	go drainRTCP(sender)
+	go drainRTCP(sender, nil)
 	return nil
 }
 
-// drainRTCP reads and discards RTCP packets from a sender. Required for NACK
-// handling on outgoing tracks; the sender stops on connection close.
-func drainRTCP(sender *webrtc.RTPSender) {
+// drainRTCP reads RTCP packets from a sender until the connection closes.
+// Reading is required for NACK handling on outgoing tracks. PLI/FIR feedback
+// is passed to onKeyframeRequest when it is set; everything else is dropped.
+func drainRTCP(sender *webrtc.RTPSender, onKeyframeRequest func(reason string)) {
 	buf := make([]byte, 1500)
 	for {
-		if _, _, err := sender.Read(buf); err != nil {
+		n, _, err := sender.Read(buf)
+		if err != nil {
 			return
+		}
+		if onKeyframeRequest == nil {
+			continue
+		}
+		pkts, err := rtcp.Unmarshal(buf[:n])
+		if err != nil {
+			continue
+		}
+		for _, pkt := range pkts {
+			switch pkt.(type) {
+			case *rtcp.PictureLossIndication:
+				onKeyframeRequest("pli")
+			case *rtcp.FullIntraRequest:
+				onKeyframeRequest("fir")
+			}
 		}
 	}
 }
@@ -233,7 +251,13 @@ func (s *Session) ExchangeOffer(offerStr string) (string, error) {
 		return "", err
 	}
 
-	go drainRTCP(rtpSender)
+	go drainRTCP(rtpSender, func(reason string) {
+		// A replaced session lingers ~1 s before it is closed; only the
+		// session that receives frames may ask for keyframes.
+		if currentSession == s {
+			requestKeyframe(reason)
+		}
+	})
 
 	if err := s.attachAudioTrack(offer.SDP); err != nil {
 		return "", err
@@ -603,6 +627,16 @@ func newSession(config SessionConfig) (*Session, error) {
 			if err != nil {
 				scopedLogger.Warn().Err(err).Msg("failed to write new-ice-candidate to WebRTC signaling channel")
 			}
+		}
+	})
+
+	// The video track drops samples until DTLS is up, and with a long GOP the
+	// next periodic IDR can be seconds away. A freshly started encoder opens
+	// with an IDR, but a handoff joins a running one (and the first IDR may
+	// beat the DTLS handshake), so ask for one once media can flow.
+	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if state == webrtc.PeerConnectionStateConnected {
+			requestKeyframe("session_connected")
 		}
 	})
 

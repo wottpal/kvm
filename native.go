@@ -98,6 +98,7 @@ func initNative(systemVersion *semver.Version, appVersion *semver.Version) {
 	if err := nativeInstance.Start(); err != nil {
 		nativeLogger.Fatal().Err(err).Msg("failed to start native proxy")
 	}
+	go runKeyframeRequester()
 	go func() {
 		_ = reapplyHostDisplayAdvertisement("native_started")
 	}()

@@ -58,6 +58,7 @@ void jetkvm_video_shutdown();
 void jetkvm_video_start();
 void jetkvm_video_stop();
 uint8_t jetkvm_video_get_streaming_status();
+int jetkvm_video_request_keyframe();
 int jetkvm_video_set_quality_factor(float quality_factor);
 float jetkvm_video_get_quality_factor();
 int jetkvm_video_set_codec_type(int codec_type);
