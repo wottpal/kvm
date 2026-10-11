@@ -16,6 +16,8 @@ type NativeInterface interface {
 	VideoStop() error
 	VideoStart() error
 	VideoRequestKeyframe() error
+	VideoGetEncoderParams() (VideoEncoderStatus, error)
+	VideoSetEncoderParams(params VideoEncoderParams) error
 	GetLVGLVersion() (string, error)
 	UIObjHide(objName string) (bool, error)
 	UIObjShow(objName string) (bool, error)

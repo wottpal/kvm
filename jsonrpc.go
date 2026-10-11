@@ -18,6 +18,7 @@ import (
 
 	"github.com/jetkvm/kvm/internal/hidrpc"
 	"github.com/jetkvm/kvm/internal/logging"
+	"github.com/jetkvm/kvm/internal/native"
 	"github.com/jetkvm/kvm/internal/usbgadget"
 	"github.com/jetkvm/kvm/internal/utils"
 )
@@ -197,6 +198,35 @@ func rpcSetStreamQualityFactor(factor float64) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 	return nil
+}
+
+func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
+	return nativeInstance.VideoGetEncoderParams()
+}
+
+// rpcSetVideoEncoderParams applies a partial update (omitted fields keep their
+// value) and returns the effective configuration. Changes are applied to the
+// running encoder (restart of capture + VENC only as fallback, never EDID or
+// hot-plug), are not persisted, and reset to the defaults when the stream stops
+// (last session gone, or paused) or the stream quality factor changes.
+func rpcSetVideoEncoderParams(params native.VideoEncoderParamsUpdate) (native.VideoEncoderStatus, error) {
+	current, err := nativeInstance.VideoGetEncoderParams()
+	if err != nil {
+		return native.VideoEncoderStatus{}, err
+	}
+	next := params.ApplyTo(current.VideoEncoderParams)
+	if err := next.Validate(); err != nil {
+		return native.VideoEncoderStatus{}, err
+	}
+	if next == current.VideoEncoderParams {
+		return current, nil
+	}
+
+	logger.Info().Interface("params", next).Msg("Setting video encoder params")
+	if err := nativeInstance.VideoSetEncoderParams(next); err != nil {
+		return native.VideoEncoderStatus{}, err
+	}
+	return nativeInstance.VideoGetEncoderParams()
 }
 
 func rpcRequestKeyframe() {
@@ -1434,6 +1464,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"sendWOLMagicPacket":         {Func: rpcSendWOLMagicPacket, Params: []string{"macAddress"}, OptionalParams: []string{"broadcastIP"}},
 	"getStreamQualityFactor":     {Func: rpcGetStreamQualityFactor},
 	"setStreamQualityFactor":     {Func: rpcSetStreamQualityFactor, Params: []string{"factor"}},
+	"getVideoEncoderParams":      {Func: rpcGetVideoEncoderParams},
+	"setVideoEncoderParams":      {Func: rpcSetVideoEncoderParams, Params: []string{"params"}},
 	"requestKeyframe":            {Func: rpcRequestKeyframe},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},

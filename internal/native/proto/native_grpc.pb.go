@@ -33,6 +33,8 @@ const (
 	NativeService_VideoStop_FullMethodName                         = "/native.NativeService/VideoStop"
 	NativeService_VideoStart_FullMethodName                        = "/native.NativeService/VideoStart"
 	NativeService_VideoRequestKeyframe_FullMethodName              = "/native.NativeService/VideoRequestKeyframe"
+	NativeService_VideoGetEncoderParams_FullMethodName             = "/native.NativeService/VideoGetEncoderParams"
+	NativeService_VideoSetEncoderParams_FullMethodName             = "/native.NativeService/VideoSetEncoderParams"
 	NativeService_GetLVGLVersion_FullMethodName                    = "/native.NativeService/GetLVGLVersion"
 	NativeService_UIObjHide_FullMethodName                         = "/native.NativeService/UIObjHide"
 	NativeService_UIObjShow_FullMethodName                         = "/native.NativeService/UIObjShow"
@@ -78,6 +80,8 @@ type NativeServiceClient interface {
 	VideoStop(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	VideoStart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	VideoRequestKeyframe(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
+	VideoGetEncoderParams(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VideoEncoderStatus, error)
+	VideoSetEncoderParams(ctx context.Context, in *VideoEncoderParams, opts ...grpc.CallOption) (*Empty, error)
 	// UI methods
 	GetLVGLVersion(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetLVGLVersionResponse, error)
 	UIObjHide(ctx context.Context, in *UIObjHideRequest, opts ...grpc.CallOption) (*UIObjHideResponse, error)
@@ -246,6 +250,26 @@ func (c *nativeServiceClient) VideoRequestKeyframe(ctx context.Context, in *Empt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, NativeService_VideoRequestKeyframe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nativeServiceClient) VideoGetEncoderParams(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VideoEncoderStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VideoEncoderStatus)
+	err := c.cc.Invoke(ctx, NativeService_VideoGetEncoderParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nativeServiceClient) VideoSetEncoderParams(ctx context.Context, in *VideoEncoderParams, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, NativeService_VideoSetEncoderParams_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -493,6 +517,8 @@ type NativeServiceServer interface {
 	VideoStop(context.Context, *Empty) (*Empty, error)
 	VideoStart(context.Context, *Empty) (*Empty, error)
 	VideoRequestKeyframe(context.Context, *Empty) (*Empty, error)
+	VideoGetEncoderParams(context.Context, *Empty) (*VideoEncoderStatus, error)
+	VideoSetEncoderParams(context.Context, *VideoEncoderParams) (*Empty, error)
 	// UI methods
 	GetLVGLVersion(context.Context, *Empty) (*GetLVGLVersionResponse, error)
 	UIObjHide(context.Context, *UIObjHideRequest) (*UIObjHideResponse, error)
@@ -568,6 +594,12 @@ func (UnimplementedNativeServiceServer) VideoStart(context.Context, *Empty) (*Em
 }
 func (UnimplementedNativeServiceServer) VideoRequestKeyframe(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method VideoRequestKeyframe not implemented")
+}
+func (UnimplementedNativeServiceServer) VideoGetEncoderParams(context.Context, *Empty) (*VideoEncoderStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method VideoGetEncoderParams not implemented")
+}
+func (UnimplementedNativeServiceServer) VideoSetEncoderParams(context.Context, *VideoEncoderParams) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method VideoSetEncoderParams not implemented")
 }
 func (UnimplementedNativeServiceServer) GetLVGLVersion(context.Context, *Empty) (*GetLVGLVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetLVGLVersion not implemented")
@@ -901,6 +933,42 @@ func _NativeService_VideoRequestKeyframe_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(NativeServiceServer).VideoRequestKeyframe(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NativeService_VideoGetEncoderParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeServiceServer).VideoGetEncoderParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeService_VideoGetEncoderParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeServiceServer).VideoGetEncoderParams(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NativeService_VideoSetEncoderParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VideoEncoderParams)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeServiceServer).VideoSetEncoderParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeService_VideoSetEncoderParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeServiceServer).VideoSetEncoderParams(ctx, req.(*VideoEncoderParams))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1338,6 +1406,14 @@ var NativeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "VideoRequestKeyframe",
 			Handler:    _NativeService_VideoRequestKeyframe_Handler,
+		},
+		{
+			MethodName: "VideoGetEncoderParams",
+			Handler:    _NativeService_VideoGetEncoderParams_Handler,
+		},
+		{
+			MethodName: "VideoSetEncoderParams",
+			Handler:    _NativeService_VideoSetEncoderParams_Handler,
 		},
 		{
 			MethodName: "GetLVGLVersion",

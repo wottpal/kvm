@@ -92,6 +92,19 @@ func (c *GRPCClient) VideoRequestKeyframe() error {
 	return err
 }
 
+func (c *GRPCClient) VideoGetEncoderParams() (VideoEncoderStatus, error) {
+	resp, err := c.client.VideoGetEncoderParams(context.Background(), &pb.Empty{})
+	if err != nil {
+		return VideoEncoderStatus{}, err
+	}
+	return videoEncoderStatusFromProto(resp), nil
+}
+
+func (c *GRPCClient) VideoSetEncoderParams(params VideoEncoderParams) error {
+	_, err := c.client.VideoSetEncoderParams(context.Background(), params.toProto())
+	return err
+}
+
 // UI methods
 func (c *GRPCClient) GetLVGLVersion() (string, error) {
 	resp, err := c.client.GetLVGLVersion(context.Background(), &pb.Empty{})

@@ -383,6 +383,18 @@ int jetkvm_video_request_keyframe() {
     return video_request_keyframe();
 }
 
+int jetkvm_video_set_encoder_params(const jetkvm_venc_params_t *params) {
+    return video_set_encoder_params(params);
+}
+
+void jetkvm_video_get_encoder_status(jetkvm_venc_status_t *status) {
+    video_get_encoder_status(status);
+}
+
+void jetkvm_video_reset_encoder_params(void) {
+    video_reset_encoder_params();
+}
+
 int jetkvm_video_set_quality_factor(float quality_factor) {
     if (quality_factor <= 0) {
         return -1;

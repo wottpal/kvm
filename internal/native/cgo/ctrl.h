@@ -15,14 +15,29 @@ typedef struct
     double frame_per_second;
 } jetkvm_video_state_t;
 
-// Encoder tunables (video.c: compiled defaults, JETKVM_VENC_* env overrides).
+// Runtime encoder tunables (see video_set_encoder_params in video.c).
 typedef struct
 {
-    int min_qp;         // 8-40
-    int max_qp;         // min_qp-51
-    double gop_seconds; // 0.5-60
-    bool aq;            // keep Rockchip texture-adaptive QP
+    int min_qp;           // 8-40
+    int max_qp;           // min_qp-51
+    double gop_seconds;   // 0.5-60
+    bool aq;              // keep Rockchip texture-adaptive QP
+    int max_fps;          // 1-120, 0 = source fps
+    int bitrate_kbps;     // 100-50000, 0 = derived from the quality factor
+    int max_bitrate_kbps; // 100-50000 (>= bitrate_kbps), 0 = 1.5x target
 } jetkvm_venc_params_t;
+
+typedef struct
+{
+    jetkvm_venc_params_t params;
+    int source_fps;
+    int encode_fps;
+    int gop_frames;
+    int effective_bitrate_kbps;
+    int effective_max_bitrate_kbps;
+    int codec; // 0 = H.264, 1 = H.265
+    bool streaming;
+} jetkvm_venc_status_t;
 
 typedef void (jetkvm_video_state_handler_t)(jetkvm_video_state_t *state);
 typedef void (jetkvm_log_handler_t)(int level, const char *filename, const char *funcname, int line, const char *message);
@@ -68,6 +83,9 @@ void jetkvm_video_start();
 void jetkvm_video_stop();
 uint8_t jetkvm_video_get_streaming_status();
 int jetkvm_video_request_keyframe();
+int jetkvm_video_set_encoder_params(const jetkvm_venc_params_t *params);
+void jetkvm_video_get_encoder_status(jetkvm_venc_status_t *status);
+void jetkvm_video_reset_encoder_params(void);
 int jetkvm_video_set_quality_factor(float quality_factor);
 float jetkvm_video_get_quality_factor();
 int jetkvm_video_set_codec_type(int codec_type);
@@ -80,6 +98,9 @@ jetkvm_video_state_t *jetkvm_video_get_status();
 void video_report_format(bool ready, const char *error, u_int16_t width, u_int16_t height, double frame_per_second);
 void video_send_format_report();
 int video_send_frame(const uint8_t *frame, ssize_t len);
+int video_set_encoder_params(const jetkvm_venc_params_t *params);
+void video_get_encoder_status(jetkvm_venc_status_t *status);
+void video_reset_encoder_params(void);
 
 
 

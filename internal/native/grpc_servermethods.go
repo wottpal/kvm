@@ -105,6 +105,21 @@ func (s *grpcServer) VideoRequestKeyframe(ctx context.Context, req *pb.Empty) (*
 	return &pb.Empty{}, nil
 }
 
+func (s *grpcServer) VideoGetEncoderParams(ctx context.Context, req *pb.Empty) (*pb.VideoEncoderStatus, error) {
+	encoderStatus, err := s.native.VideoGetEncoderParams()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return encoderStatus.toProto(), nil
+}
+
+func (s *grpcServer) VideoSetEncoderParams(ctx context.Context, req *pb.VideoEncoderParams) (*pb.Empty, error) {
+	if err := s.native.VideoSetEncoderParams(videoEncoderParamsFromProto(req)); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return &pb.Empty{}, nil
+}
+
 // UI methods
 func (s *grpcServer) GetLVGLVersion(ctx context.Context, req *pb.Empty) (*pb.GetLVGLVersionResponse, error) {
 	version, err := s.native.GetLVGLVersion()

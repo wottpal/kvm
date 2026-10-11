@@ -53,6 +53,14 @@ func (e *EmptyNativeInterface) VideoRequestKeyframe() error {
 	return nil
 }
 
+func (e *EmptyNativeInterface) VideoGetEncoderParams() (VideoEncoderStatus, error) {
+	return VideoEncoderStatus{}, nil
+}
+
+func (e *EmptyNativeInterface) VideoSetEncoderParams(params VideoEncoderParams) error {
+	return nil
+}
+
 func (e *EmptyNativeInterface) GetLVGLVersion() (string, error) {
 	return "", nil
 }

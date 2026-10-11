@@ -612,6 +612,20 @@ func (p *NativeProxy) VideoRequestKeyframe() error {
 	})
 }
 
+func (p *NativeProxy) VideoGetEncoderParams() (encoderStatus VideoEncoderStatus, err error) {
+	err = nativeProxyClientExecWithoutArgument(p, func(client *GRPCClient) error {
+		encoderStatus, err = client.VideoGetEncoderParams()
+		return err
+	})
+	return encoderStatus, err
+}
+
+func (p *NativeProxy) VideoSetEncoderParams(params VideoEncoderParams) error {
+	return nativeProxyClientExecWithoutArgument(p, func(client *GRPCClient) error {
+		return client.VideoSetEncoderParams(params)
+	})
+}
+
 func (p *NativeProxy) GetLVGLVersion() (string, error) {
 	return nativeProxyClientExec[string](p, func(client *GRPCClient) (string, error) {
 		return client.GetLVGLVersion()
