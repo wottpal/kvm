@@ -31,6 +31,8 @@ void jetkvm_log(const char *message);
 #define LEVEL_INFO    1
 #define LEVEL_DEBUG   0
 #define LEVEL_TRACE   -1
+/* zerolog.NoLevel: emitted at any configured log level (rendered as info) */
+#define LEVEL_NOTICE  6
 
 /* TRACE LOG */
 #define log_trace(...) do {                                                        \
@@ -59,13 +61,12 @@ void jetkvm_log(const char *message);
     }                                                                              \
 } while (0)
 
-/* NOTICE LOG */
+/* NOTICE LOG: rare, important state (e.g. encoder config); always emitted.
+ * The native process logs at ERROR unless JETKVM_LOG_* env says otherwise. */
 #define log_notice(...) do {                                                       \
-    if (LOG_LEVEL <= LEVEL_INFO) {                                                 \
-        emit_log(                                                                  \
-            LEVEL_INFO, __FILENAME__, __func__, __LINE__, __VA_ARGS__              \
-        );                                                                         \
-    }                                                                              \
+    emit_log(                                                                      \
+        LEVEL_NOTICE, __FILENAME__, __func__, __LINE__, __VA_ARGS__                \
+    );                                                                             \
 } while (0)
 
 /* WARN LOG */

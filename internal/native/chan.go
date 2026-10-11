@@ -58,7 +58,8 @@ func (n *Native) handleLogChan() {
 		case zerolog.TraceLevel:
 			l.Trace().Msg(entry.Message)
 		case zerolog.NoLevel:
-			l.Info().Msg(entry.Message)
+			// C log_notice: bypass the level filter, render as info.
+			l.Log().Str(zerolog.LevelFieldName, zerolog.InfoLevel.String()).Msg(entry.Message)
 		default:
 			l.Info().Msg(entry.Message)
 		}
