@@ -457,6 +457,13 @@ func newSession(config SessionConfig) (*Session, error) {
 	webrtcSettingEngine := webrtc.SettingEngine{
 		LoggerFactory: logging.GetPionDefaultLoggerFactory(),
 	}
+	// SCTP (every data channel: HID, RPC, serial) retransmits a lost packet
+	// after an RTO that doubles on every miss, up to 60 s by default. After a
+	// network hiccup the video resumes at once while the data channels stay
+	// stuck until the backed-off timer fires (seconds, or minutes after a
+	// longer outage). Capped at 1 s, pion's minimum RTO, they are back within
+	// a second.
+	webrtcSettingEngine.SetSCTPRTOMax(time.Second)
 
 	if config.MDNSMode != "" && config.MDNSMode != "disabled" {
 		webrtcSettingEngine.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
