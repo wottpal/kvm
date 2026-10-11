@@ -247,6 +247,21 @@ It skips HTML comments and fenced code blocks.
   re-detection of over 10 s.
 - **Remove when:** upstream skips unchanged EDID writes.
 
+### D09 — Data channels recover within a second after a network hiccup
+
+- **Since:** 2026-10-11
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `webrtc.go`
+- **What:** the SCTP retransmission timeout is capped at 1 s (`SettingEngine.SetSCTPRTOMax`), pion's minimum RTO.
+- **Why:** SCTP carries every data channel (HID, RPC, serial) and retransmits a lost packet after an RTO that doubles
+  on every miss, up to 60 s by default. After a network hiccup the video resumes at once, but the data channels stay
+  stuck until the backed-off timer fires: keyboard and pointer seem dead for seconds, or minutes after a longer
+  outage. Measured with 3.3 s outages: 3.4–3.6 s of extra stall with the default, at most 0.7 s with the cap. The JetKVM
+  Desktop app caps its own side the same way (it sends the input).
+- **Remove when:** upstream caps the SCTP RTO.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
