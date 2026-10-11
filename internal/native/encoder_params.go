@@ -39,8 +39,15 @@ type VideoEncoderParamsUpdate struct {
 }
 
 // VideoEncoderStatus is the effective encoder configuration.
+// CaptureMaxBytes is the size of each capture buffer (VIDEO_CAPTURE_MAX_BYTES in
+// cgo/video.c): a mode needs width x height x 2 bytes at most. Upstream's buffers
+// hold 1920x1080x3 bytes.
+const CaptureMaxBytes = 8 << 20
+
 type VideoEncoderStatus struct {
 	VideoEncoderParams
+	// CaptureMaxBytes tells clients the largest mode the device captures.
+	CaptureMaxBytes         int    `json:"captureMaxBytes"`
 	SourceFPS               int    `json:"sourceFps"`
 	EncodeFPS               int    `json:"encodeFps"`
 	GOPFrames               int    `json:"gopFrames"`
@@ -158,5 +165,6 @@ func videoEncoderStatusFromProto(s *pb.VideoEncoderStatus) VideoEncoderStatus {
 		EffectiveMaxBitrateKbps: int(s.GetEffectiveMaxBitrateKbps()),
 		Codec:                   s.GetCodec(),
 		Streaming:               s.GetStreaming(),
+		CaptureMaxBytes:         CaptureMaxBytes,
 	}
 }

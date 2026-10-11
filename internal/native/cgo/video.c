@@ -1189,11 +1189,19 @@ struct buffer
 
 const int input_buffer_count = 3;
 
+// Capture buffer size, so the largest mode at 2 bytes per pixel (YUYV):
+// 8 MiB fits 4.19 megapixels, e.g. 3008x1268 or 2560x1600, which the bridge
+// carries at up to 30 Hz (its slow CSI link). Upstream sized them for
+// 1920x1080 (6,220,800 bytes). The three buffers come out of the 48 MiB video
+// CMA; at the largest mode the encoder's references and stream buffer add
+// about 19 MiB more. internal/native/encoder_params.go reports it to clients.
+#define VIDEO_CAPTURE_MAX_BYTES (8u << 20)
+
 static int32_t buf_init()
 {
     MB_POOL_CONFIG_S stMbPoolCfg;
     memset(&stMbPoolCfg, 0, sizeof(MB_POOL_CONFIG_S));
-    stMbPoolCfg.u64MBSize = 1920 * 1080 * 3; // max resolution
+    stMbPoolCfg.u64MBSize = VIDEO_CAPTURE_MAX_BYTES;
     stMbPoolCfg.u32MBCnt = input_buffer_count;
     stMbPoolCfg.enAllocType = MB_ALLOC_TYPE_DMA;
     stMbPoolCfg.bPreAlloc = RK_TRUE;
@@ -1484,7 +1492,8 @@ void *run_video_stream(void *arg)
             MB_BLK blk = RK_MPI_MB_GetMB(memPool, (planes_buffer)->length, RK_TRUE);
             if (blk == NULL)
             {
-                log_error("get mb blk failed!");
+                log_error("get mb blk failed: a %ux%u frame needs %u bytes, capture buffers hold %u",
+                          width, height, planes_buffer->length, VIDEO_CAPTURE_MAX_BYTES);
                 close(video_dev_fd);
                 return (void *)errno;
             }

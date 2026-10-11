@@ -286,6 +286,25 @@ It skips HTML comments and fenced code blocks.
   Desktop app caps its own side the same way (it sends the input).
 - **Remove when:** upstream caps the SCTP RTO.
 
+### D10 — Capture buffers for modes up to 4.19 megapixels
+
+- **Since:** 2026-10-11
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `internal/native/cgo/video.c`
+  - `internal/native/encoder_params.go`
+- **What:** the three capture buffers hold 8 MiB each instead of upstream's 1920×1080×3 bytes, so modes up to 4.19
+  megapixels at 2 bytes per pixel (YUYV) capture, e.g. 3008×1268 or 2560×1600. `getVideoEncoderParams` reports the size
+  as `captureMaxBytes`. A mode that does not fit logs its size against the buffers' instead of a bare failure.
+- **Why:** the TC358749's driver runs the CSI link at 109.7 Mpx/s for modes of 33 Hz or less (745 Mbit/s a lane above,
+  438.75 at or below). A pixel clock just under that rate drains each line about as fast as it arrives, so any width up to
+  the bridge's 4000-pixel lines streams, where the fast link stops near 2500 pixels. The JetKVM Desktop app uses this to
+  give a large window its full resolution: 3008×1268 at 25 Hz for a 40" 21:9 display (measured clean, 0 decode errors).
+  Upstream's buffers capped those modes at 3.1 megapixels. Video CMA: 42.6 of 48 MiB in use at 3008×1268 (the buffers
+  are preallocated, 24.6 MiB idle).
+- **Remove when:** upstream sizes the capture buffers for modes above 1080p.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
