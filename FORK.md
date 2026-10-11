@@ -12,7 +12,7 @@ file in the same pull request.
 - **Merge base:** `8f6c3001b1064eb32b3f66afd04efbe536bbaf87` (`release/0.5.9` plus upstream `dev` up to "Revert \"Add Auto
   video quality using RTCP REMB\" (#1693)", 2026-10-05)
 - **Fork created:** 2026-10-11. Last upstream sync: 2026-10-11.
-- **Latest release:** `release/0.5.9-fork.2` (see **Releases**).
+- **Latest release:** `release/0.5.9-fork.3` (see **Releases**).
 
 ## Policy
 
@@ -310,6 +310,7 @@ upstream sync cannot start running in this fork unnoticed.
 | ---------------------- | ----------------------------------------------------- | ------------------------------------------------------------------ | ----------- | ----------------------------------------------------------------------------------------- |
 | `release/0.5.9-fork.1` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `578ed5f58523cd5a5d40833061b093104edbe9ba48f4075767c69985c59b453e` | D01–D08     | First release, of `8f7e586`; 31,534,728 bytes; installed on the maintainer's device 2026-10-11 |
 | `release/0.5.9-fork.2` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `a6d3fbf7d2cba58261c066d70ad5fb2b2b6c6d75834185f755decc8106849488` | D01–D09     | Adds D09 (SCTP RTO cap), of `6120af0`; 31,534,728 bytes; installed on the maintainer's device 2026-10-11 |
+| `release/0.5.9-fork.3` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `88dbed94a6fd1c185e7adcaa47da94d23a42151503ebaeded39aab7d0b6fd7a1` | D01–D09     | D06 live frame-rate fix (#11) and review fixes for D04, D06–D08 (#12), of `5fc9be5`; 31,547,016 bytes; installed on the maintainer's device 2026-10-11 |
 
 Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.9-fork.1`, where
 `<upstream version>` is the latest upstream release in the merge base. The binary itself is built with upstream's
