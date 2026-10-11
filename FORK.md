@@ -12,6 +12,7 @@ file in the same pull request.
 - **Merge base:** `8f6c3001b1064eb32b3f66afd04efbe536bbaf87` (`release/0.5.9` plus upstream `dev` up to "Revert \"Add Auto
   video quality using RTCP REMB\" (#1693)", 2026-10-05)
 - **Fork created:** 2026-10-11. Last upstream sync: 2026-10-11.
+- **Latest release:** `release/0.5.9-fork.1` (see **Releases**).
 
 ## Policy
 
@@ -266,8 +267,9 @@ upstream sync cannot start running in this fork unnoticed.
 
 ## Releases
 
-| Fork tag | Upstream base | `jetkvm_app` SHA-256 | Divergences | Notes |
-| -------- | ------------- | -------------------- | ----------- | ----- |
+| Fork tag               | Upstream base                                         | `jetkvm_app` SHA-256                                               | Divergences | Notes                                                                                     |
+| ---------------------- | ----------------------------------------------------- | ------------------------------------------------------------------ | ----------- | ----------------------------------------------------------------------------------------- |
+| `release/0.5.9-fork.1` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `578ed5f58523cd5a5d40833061b093104edbe9ba48f4075767c69985c59b453e` | D01–D08     | First release, of `8f7e586`; 31,534,728 bytes; installed on the maintainer's device 2026-10-11 |
 
 Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.9-fork.1`, where
 `<upstream version>` is the latest upstream release in the merge base. The binary itself is built with upstream's
