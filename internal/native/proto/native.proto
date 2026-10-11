@@ -22,6 +22,7 @@ service NativeService {
   rpc VideoLogStatus(Empty) returns (VideoLogStatusResponse);
   rpc VideoStop(Empty) returns (Empty);
   rpc VideoStart(Empty) returns (Empty);
+  rpc VideoRequestKeyframe(Empty) returns (Empty);
 
   // UI methods
   rpc GetLVGLVersion(Empty) returns (GetLVGLVersionResponse);

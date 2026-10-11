@@ -199,6 +199,10 @@ func rpcSetStreamQualityFactor(factor float64) error {
 	return nil
 }
 
+func rpcRequestKeyframe() {
+	requestKeyframe("rpc")
+}
+
 func rpcGetSupportedVideoCodecs() []string {
 	return []string{"h264", "h265"}
 }
@@ -1430,6 +1434,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"sendWOLMagicPacket":         {Func: rpcSendWOLMagicPacket, Params: []string{"macAddress"}, OptionalParams: []string{"broadcastIP"}},
 	"getStreamQualityFactor":     {Func: rpcGetStreamQualityFactor},
 	"setStreamQualityFactor":     {Func: rpcSetStreamQualityFactor, Params: []string{"factor"}},
+	"requestKeyframe":            {Func: rpcRequestKeyframe},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},
 	"setVideoCodecPreference":    {Func: rpcSetVideoCodecPreference, Params: []string{"codec"}},

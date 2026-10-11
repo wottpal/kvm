@@ -87,6 +87,11 @@ func (c *GRPCClient) VideoStart() error {
 	return err
 }
 
+func (c *GRPCClient) VideoRequestKeyframe() error {
+	_, err := c.client.VideoRequestKeyframe(context.Background(), &pb.Empty{})
+	return err
+}
+
 // UI methods
 func (c *GRPCClient) GetLVGLVersion() (string, error) {
 	resp, err := c.client.GetLVGLVersion(context.Background(), &pb.Empty{})

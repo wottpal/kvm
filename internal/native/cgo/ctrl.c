@@ -379,6 +379,10 @@ uint8_t jetkvm_video_get_streaming_status() {
     return video_get_streaming_status();
 }
 
+int jetkvm_video_request_keyframe() {
+    return video_request_keyframe();
+}
+
 int jetkvm_video_set_quality_factor(float quality_factor) {
     if (quality_factor <= 0) {
         return -1;

@@ -17,7 +17,33 @@ var (
 
 const (
 	defaultVideoSleepModeDuration = 1 * time.Minute
+
+	// keyframeRequestInterval caps on-demand IDRs (receiver PLI/FIR, new
+	// sessions) at two per second. Requests inside the window coalesce into
+	// one that is sent when it ends, so none is lost.
+	keyframeRequestInterval = 500 * time.Millisecond
 )
+
+var keyframeRequests = make(chan string, 1)
+
+// requestKeyframe queues an encoder IDR request without blocking the caller.
+func requestKeyframe(reason string) {
+	select {
+	case keyframeRequests <- reason:
+	default: // one is already pending
+	}
+}
+
+func runKeyframeRequester() {
+	for reason := range keyframeRequests {
+		if err := nativeInstance.VideoRequestKeyframe(); err != nil {
+			nativeLogger.Warn().Err(err).Str("reason", reason).Msg("keyframe request failed")
+		} else {
+			nativeLogger.Debug().Str("reason", reason).Msg("requested keyframe")
+		}
+		time.Sleep(keyframeRequestInterval)
+	}
+}
 
 func triggerVideoStateUpdate() {
 	go func() {

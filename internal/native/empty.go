@@ -49,6 +49,10 @@ func (e *EmptyNativeInterface) VideoStart() error {
 	return nil
 }
 
+func (e *EmptyNativeInterface) VideoRequestKeyframe() error {
+	return nil
+}
+
 func (e *EmptyNativeInterface) GetLVGLVersion() (string, error) {
 	return "", nil
 }

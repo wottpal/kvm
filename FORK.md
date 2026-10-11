@@ -85,6 +85,47 @@ It skips HTML comments and fenced code blocks.
   tags change; the conversion is the bridge's.
 - **Remove when:** upstream tags the stream by the bridge's conversion.
 
+### D04 — Keyframes on demand
+
+- **Since:** 2026-10-11
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `go.mod`
+  - `native.go`
+  - `video.go`
+  - `webrtc.go`
+  - `jsonrpc.go`
+  - `internal/native/cgo/ctrl.c`
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/cgo/video.c`
+  - `internal/native/cgo/video.h`
+  - `internal/native/cgo_linux.go`
+  - `internal/native/cgo_notlinux.go`
+  - `internal/native/empty.go`
+  - `internal/native/grpc_clientmethods.go`
+  - `internal/native/grpc_servermethods.go`
+  - `internal/native/interface.go`
+  - `internal/native/proxy.go`
+  - `internal/native/video.go`
+  - `internal/native/proto/native.proto`
+  - `internal/native/proto/native.pb.go`
+  - `internal/native/proto/native_grpc.pb.go`
+- **What:** the encoder sends an IDR frame when a client asks for one:
+  - on RTCP PLI or FIR from the browser or app (upstream reads RTCP only to drain it);
+  - when a WebRTC session reaches `connected`, since a handoff joins a running encoder and the first IDR may beat
+    DTLS;
+  - through the JSON-RPC method `requestKeyframe` (no parameters, returns `null`).
+  - Requests are rate-limited to two per second; requests inside the window coalesce into one at its end. Only the
+    current session may ask.
+  - The native side (`video_request_keyframe`) verifies each request by watching the encoder output for an IDR, and
+    keeps the first path that works: `RK_MPI_VENC_RequestIDR` instant (this rockit build rejects it), non-instant (it
+    returns success even when the encoder ignores it), then a one-frame change of the GOP length, which makes MPP
+    resend SPS/PPS with an IDR. A new gRPC method `VideoRequestKeyframe` carries the request to the native process.
+- **Why:** without it, a decoder that lost a frame shows corruption until the next periodic keyframe; upstream's 0.5 s
+  GOP bounds that by resending a full keyframe twice a second, which a long GOP cannot afford.
+- **Remove when:** upstream answers PLI/FIR with keyframes.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -166,3 +207,4 @@ copy files with `ssh ... "cat > file" < file`.
 - **Firmware:** install upstream's `jetkvm_app` the same way (the backup, or the release binary with its `.sha256`
   and `.sig`). The fork persists nothing of its own (encoder overrides live in memory, no configuration keys are
   added), so the stock app starts from the same configuration.
+- **D04:** clients that call `requestKeyframe` get "method not found" from stock firmware.

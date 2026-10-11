@@ -241,6 +241,13 @@ func (n *Native) VideoStart() error {
 	return nil
 }
 
+// VideoRequestKeyframe asks the encoder for an IDR frame. It deliberately
+// skips videoLock: start/stop/quality changes hold it for seconds, and the
+// C side orders the request against encoder teardown itself.
+func (n *Native) VideoRequestKeyframe() error {
+	return videoRequestKeyframe()
+}
+
 // VideoGetStreamingStatus gets the streaming status of the video.
 func (n *Native) VideoGetStreamingStatus() VideoStreamingStatus {
 	n.videoLock.Lock()

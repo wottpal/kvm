@@ -169,6 +169,16 @@ func videoStop() {
 	C.jetkvm_video_stop()
 }
 
+// videoRequestKeyframe does not take cgoLock: it is held across whole stream
+// restarts, and video.c serializes this call with its own encoder mutex.
+func videoRequestKeyframe() error {
+	ret := C.jetkvm_video_request_keyframe()
+	if ret != 0 {
+		return fmt.Errorf("failed to request keyframe: %#x", uint32(ret))
+	}
+	return nil
+}
+
 func videoGetStreamingStatus() VideoStreamingStatus {
 	cgoLock.Lock()
 	defer cgoLock.Unlock()

@@ -143,20 +143,12 @@ static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
     video_signal->matrix_coefficients = 6; // BT.601 (SMPTE 170M), as converted by the bridge
 }
 
-static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 max_bitrate, RK_U32 width, RK_U32 height, RK_U32 fps)
+static void venc_set_rc_attr(VENC_CHN_ATTR_S *stAttr, bool hevc, RK_U32 bitrate, RK_U32 max_bitrate, RK_U32 fps, RK_U32 gop)
 {
-    memset(stAttr, 0, sizeof(VENC_CHN_ATTR_S));
-
     RK_U32 min_bitrate = bitrate / 2;
     if (min_bitrate < 2) min_bitrate = 2;
 
-    // GOP scales with framerate so IDR cadence stays ~0.5s regardless of source
-    // refresh — keeps WebRTC recovery latency bounded at 60 Hz and 120 Hz alike.
-    RK_U32 gop = fps > 0 ? fps / 2 : 30;
-    if (gop < 1) gop = 1;
-
-    if (codec_type == 1) {
-        // H.265 (HEVC)
+    if (hevc) {
         stAttr->stRcAttr.enRcMode = VENC_RC_MODE_H265VBR;
         stAttr->stRcAttr.stH265Vbr.u32BitRate = bitrate;
         stAttr->stRcAttr.stH265Vbr.u32MaxBitRate = max_bitrate;
@@ -167,10 +159,7 @@ static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 m
         stAttr->stRcAttr.stH265Vbr.u32SrcFrameRateDen = 1;
         stAttr->stRcAttr.stH265Vbr.fr32DstFrameRateNum = fps;
         stAttr->stRcAttr.stH265Vbr.fr32DstFrameRateDen = 1;
-        stAttr->stVencAttr.enType = RK_VIDEO_ID_HEVC;
-        stAttr->stVencAttr.u32Profile = H265E_PROFILE_MAIN;
     } else {
-        // H.264 (AVC)
         stAttr->stRcAttr.enRcMode = VENC_RC_MODE_H264VBR;
         stAttr->stRcAttr.stH264Vbr.u32BitRate = bitrate;
         stAttr->stRcAttr.stH264Vbr.u32MaxBitRate = max_bitrate;
@@ -181,10 +170,17 @@ static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 m
         stAttr->stRcAttr.stH264Vbr.u32SrcFrameRateDen = 1;
         stAttr->stRcAttr.stH264Vbr.fr32DstFrameRateNum = fps;
         stAttr->stRcAttr.stH264Vbr.fr32DstFrameRateDen = 1;
-        stAttr->stVencAttr.enType = RK_VIDEO_ID_AVC;
-        stAttr->stVencAttr.u32Profile = H264E_PROFILE_HIGH;
     }
+}
 
+static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 max_bitrate, RK_U32 width, RK_U32 height, RK_U32 fps, RK_U32 gop)
+{
+    memset(stAttr, 0, sizeof(VENC_CHN_ATTR_S));
+
+    const bool hevc = codec_type == 1;
+    venc_set_rc_attr(stAttr, hevc, bitrate, max_bitrate, fps, gop);
+    stAttr->stVencAttr.enType = hevc ? RK_VIDEO_ID_HEVC : RK_VIDEO_ID_AVC;
+    stAttr->stVencAttr.u32Profile = hevc ? H265E_PROFILE_MAIN : H264E_PROFILE_HIGH;
     stAttr->stVencAttr.enPixelFormat = RK_FMT_YUV422_YUYV;
     stAttr->stVencAttr.u32PicWidth = width;
     stAttr->stVencAttr.u32PicHeight = height;
@@ -241,17 +237,51 @@ static void venc_configure_limited_range_vui(void)
 
 pthread_t *venc_read_thread = NULL;
 volatile bool venc_running = false;
+// Guards venc_running and venc_live. Held across channel creation and every
+// call that touches the running channel from another thread (IDR requests),
+// so none of them races RK_MPI_VENC_DestroyChn.
+static pthread_mutex_t venc_state_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// What the running channel is configured with.
+static struct
+{
+    bool hevc;
+    RK_U32 encode_fps;
+    RK_U32 gop;       // nominal GOP length
+    RK_U32 gop_nudge; // 0/1 frame added by the keyframe GOP-nudge fallback
+    RK_U32 bitrate;
+    RK_U32 max_bitrate;
+} venc_live;
+
+static void venc_set_running(bool running)
+{
+    pthread_mutex_lock(&venc_state_mutex);
+    venc_running = running;
+    pthread_mutex_unlock(&venc_state_mutex);
+}
+
 static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, int32_t height, int32_t fps)
 {
     int32_t ret;
     VENC_CHN_ATTR_S stAttr;
-    populate_venc_attr(&stAttr, bitrate, max_bitrate, width, height, fps);
 
+    pthread_mutex_lock(&venc_state_mutex);
+    venc_live.hevc = codec_type == 1;
+    venc_live.encode_fps = fps;
+    // GOP scales with framerate so IDR cadence stays ~0.5s regardless of source
+    // refresh — keeps WebRTC recovery latency bounded at 60 Hz and 120 Hz alike.
+    venc_live.gop = fps > 0 ? fps / 2 : 30;
+    if (venc_live.gop < 1) venc_live.gop = 1;
+    venc_live.gop_nudge = 0;
+    venc_live.bitrate = bitrate;
+    venc_live.max_bitrate = max_bitrate;
+
+    populate_venc_attr(&stAttr, bitrate, max_bitrate, width, height, fps, venc_live.gop);
     ret = RK_MPI_VENC_CreateChn(VENC_CHANNEL, &stAttr);
-    if (ret < 0)
+    if (ret != RK_SUCCESS)
     {
         RK_LOGE("error RK_MPI_VENC_CreateChn, %d", ret);
-        return ret;
+        goto out;
     }
 
     venc_configure_limited_range_vui();
@@ -260,13 +290,20 @@ static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, i
     memset(&stRecvParam, 0, sizeof(VENC_RECV_PIC_PARAM_S));
     stRecvParam.s32RecvPicNum = -1;
     ret = RK_MPI_VENC_StartRecvFrame(VENC_CHANNEL, &stRecvParam);
-    if (ret < 0)
+    if (ret != RK_SUCCESS)
     {
         RK_LOGE("error RK_MPI_VENC_StartRecvFrame, %d", ret);
+        goto out;
+    }
+    venc_running = true;
+
+out:
+    pthread_mutex_unlock(&venc_state_mutex);
+    if (ret != RK_SUCCESS)
+    {
         return ret;
     }
 
-    venc_running = true;
     venc_read_thread = malloc(sizeof(pthread_t));
     if (pthread_create(venc_read_thread, NULL, venc_read_stream, NULL) != 0)
     {
@@ -279,7 +316,7 @@ static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, i
 
 static int32_t venc_stop()
 {
-    venc_running = false;
+    venc_set_running(false);
 
     int32_t ret;
     ret = RK_MPI_VENC_StopRecvFrame(VENC_CHANNEL);
@@ -304,6 +341,228 @@ static int32_t venc_stop()
     }
 
     return RK_SUCCESS;
+}
+
+// Encoder output counters, bumped by venc_read_stream for every frame / IDR;
+// video_request_keyframe waits on them to verify that a request worked.
+static pthread_mutex_t venc_out_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t venc_out_cond = PTHREAD_COND_INITIALIZER;
+static uint64_t venc_out_frames = 0;
+static uint64_t venc_out_idrs = 0;
+
+// True if the first VCL NAL unit of an Annex-B access unit is an IDR slice.
+// Parsed from the bitstream because rockit's pack DataType is not reliable.
+static bool annexb_is_idr(const uint8_t *data, size_t len, bool hevc)
+{
+    const size_t limit = len < 4096 ? len : 4096;
+    for (size_t i = 0; i + 3 < limit; i++)
+    {
+        if (data[i] != 0 || data[i + 1] != 0 || data[i + 2] != 1)
+        {
+            continue;
+        }
+        const uint8_t header = data[i + 3];
+        if (hevc)
+        {
+            const uint8_t type = (header >> 1) & 0x3f;
+            if (type <= 31) // VCL
+            {
+                return type == 19 || type == 20; // IDR_W_RADL, IDR_N_LP
+            }
+        }
+        else
+        {
+            const uint8_t type = header & 0x1f;
+            if (type >= 1 && type <= 5) // coded slice
+            {
+                return type == 5;
+            }
+        }
+        i += 3;
+    }
+    return false;
+}
+
+static void venc_count_output(const uint8_t *data, size_t len)
+{
+    const bool idr = annexb_is_idr(data, len, venc_live.hevc);
+    pthread_mutex_lock(&venc_out_mutex);
+    venc_out_frames++;
+    if (idr)
+    {
+        venc_out_idrs++;
+    }
+    pthread_cond_broadcast(&venc_out_cond);
+    pthread_mutex_unlock(&venc_out_mutex);
+    if (idr)
+    {
+        log_info("VENC IDR frame: %u bytes", (unsigned)len);
+    }
+}
+
+// MPP forces an IDR and resends SPS/PPS when the GOP length changes
+// (mpp_enc_proc_rc_cfg -> enc_set_resend_hdr), so alternate it by one frame.
+// Caller holds venc_state_mutex with venc_running set.
+static int32_t venc_gop_nudge_locked(void)
+{
+    VENC_CHN_ATTR_S stAttr;
+    memset(&stAttr, 0, sizeof(stAttr));
+    int32_t ret = RK_MPI_VENC_GetChnAttr(VENC_CHANNEL, &stAttr);
+    if (ret != RK_SUCCESS)
+    {
+        return ret;
+    }
+    const RK_U32 nudge = venc_live.gop_nudge ^ 1;
+    venc_set_rc_attr(&stAttr, venc_live.hevc, venc_live.bitrate, venc_live.max_bitrate,
+                     venc_live.encode_fps, venc_live.gop + nudge);
+    ret = RK_MPI_VENC_SetChnAttr(VENC_CHANNEL, &stAttr);
+    if (ret == RK_SUCCESS)
+    {
+        venc_live.gop_nudge = nudge;
+    }
+    return ret;
+}
+
+// Keyframe paths in fallback order. This rockit build rejects instant
+// RequestIDR with RK_ERR_VENC_NOT_SUPPORT; the non-instant variant returns 0
+// even when the encoder ignores it, so every path is verified by watching the
+// encoder output for an IDR.
+enum
+{
+    KF_REQUEST_IDR_INSTANT,
+    KF_REQUEST_IDR,
+    KF_GOP_NUDGE,
+    KF_PATH_COUNT
+};
+static const char *const kf_path_names[KF_PATH_COUNT] = {
+    "RK_MPI_VENC_RequestIDR(instant)",
+    "RK_MPI_VENC_RequestIDR(non-instant)",
+    "RK_MPI_VENC_SetChnAttr GOP nudge",
+};
+#define KF_VERIFY_FRAMES 6 // encoded frames without an IDR before a path counts as failed
+#define KF_NOT_RUNNING 1
+
+static pthread_mutex_t kf_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int kf_path = KF_REQUEST_IDR_INSTANT; // first path to try; the last one that worked
+static int kf_path_logged = -1;
+
+static int32_t kf_issue(int path, RK_U32 *encode_fps)
+{
+    int32_t ret = KF_NOT_RUNNING;
+    pthread_mutex_lock(&venc_state_mutex);
+    // Not running: nothing to do, a (re)created channel starts with an IDR.
+    if (venc_running)
+    {
+        *encode_fps = venc_live.encode_fps;
+        switch (path)
+        {
+        case KF_REQUEST_IDR_INSTANT:
+            ret = RK_MPI_VENC_RequestIDR(VENC_CHANNEL, RK_TRUE);
+            break;
+        case KF_REQUEST_IDR:
+            ret = RK_MPI_VENC_RequestIDR(VENC_CHANNEL, RK_FALSE);
+            break;
+        default:
+            ret = venc_gop_nudge_locked();
+            break;
+        }
+    }
+    pthread_mutex_unlock(&venc_state_mutex);
+    return ret;
+}
+
+typedef enum
+{
+    KF_SEEN,         // an IDR came out
+    KF_MISSING,      // KF_VERIFY_FRAMES frames came out, none an IDR
+    KF_INCONCLUSIVE, // too few frames (no signal, restart): don't judge the path
+} kf_result_t;
+
+static kf_result_t kf_wait_for_idr(uint64_t frames0, uint64_t idrs0, RK_U32 encode_fps)
+{
+    // Room for KF_VERIFY_FRAMES + 2 frame intervals plus encoder latency.
+    const long timeout_ms = 200 + (KF_VERIFY_FRAMES + 2) * 1000L / (encode_fps > 0 ? encode_fps : 1);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (timeout_ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L)
+    {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    kf_result_t result = KF_INCONCLUSIVE;
+    pthread_mutex_lock(&venc_out_mutex);
+    for (;;)
+    {
+        if (venc_out_idrs != idrs0)
+        {
+            result = KF_SEEN;
+            break;
+        }
+        if (venc_out_frames - frames0 >= KF_VERIFY_FRAMES)
+        {
+            result = KF_MISSING;
+            break;
+        }
+        if (pthread_cond_timedwait(&venc_out_cond, &venc_out_mutex, &deadline) == ETIMEDOUT)
+        {
+            break;
+        }
+    }
+    pthread_mutex_unlock(&venc_out_mutex);
+    return result;
+}
+
+int video_request_keyframe()
+{
+    int32_t status = -1;
+    pthread_mutex_lock(&kf_mutex);
+    for (int path = kf_path; path < KF_PATH_COUNT; path++)
+    {
+        pthread_mutex_lock(&venc_out_mutex);
+        const uint64_t frames0 = venc_out_frames;
+        const uint64_t idrs0 = venc_out_idrs;
+        pthread_mutex_unlock(&venc_out_mutex);
+
+        RK_U32 encode_fps = 0;
+        const int32_t ret = kf_issue(path, &encode_fps);
+        if (ret == KF_NOT_RUNNING)
+        {
+            status = 0;
+            break;
+        }
+        if (ret != RK_SUCCESS)
+        {
+            log_notice("keyframe path %s failed: %#x", kf_path_names[path], ret);
+            continue;
+        }
+
+        const kf_result_t result = kf_wait_for_idr(frames0, idrs0, encode_fps);
+        if (result == KF_MISSING)
+        {
+            log_notice("keyframe path %s produced no IDR within %d frames",
+                       kf_path_names[path], KF_VERIFY_FRAMES);
+            continue;
+        }
+        // Seen, or nothing to judge by (no frames flowing): keep this path.
+        kf_path = path;
+        if (result == KF_SEEN && kf_path_logged != path)
+        {
+            log_notice("keyframe requests use %s", kf_path_names[path]);
+            kf_path_logged = path;
+        }
+        status = 0;
+        break;
+    }
+    if (status != 0)
+    {
+        log_error("all keyframe paths failed; next request starts over");
+        kf_path = KF_REQUEST_IDR_INSTANT;
+    }
+    pthread_mutex_unlock(&kf_mutex);
+    return status;
 }
 
 struct buffer
@@ -428,6 +687,7 @@ static void *venc_read_stream(void *arg)
                    loopCount, stFrame.u32Seq, stFrame.pstPack->u32Len,
                    stFrame.pstPack->u64PTS, nowUs - stFrame.pstPack->u64PTS);
             pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
+            venc_count_output(pData, stFrame.pstPack->u32Len);
             video_send_frame(pData, (ssize_t)stFrame.pstPack->u32Len);
             s32Ret = RK_MPI_VENC_ReleaseStream(VENC_CHANNEL, &stFrame);
             if (s32Ret != RK_SUCCESS)
