@@ -116,53 +116,31 @@ double calculate_bitrate(float bitrate_factor, int width, int height)
     return bitrate;
 }
 
-static bool is_hd_video(RK_U32 height)
+// The TC358749 bridge always converts to BT.601 limited-range YCbCr for the
+// YUV 4:2:2 bus format (tc35874x.c tc35874x_set_csi_color_space():
+// MASK_VOUT_COLOR_601_YCBCR_LIMITED), whatever the resolution. Measured
+// against a test image: decoded colors match the BT.601 matrix within 0.5
+// code values, the BT.709 matrix is off by ~8. The content is an sRGB desktop,
+// so only the matrix is 601: tag BT.709 (~sRGB) primaries/transfer with the
+// BT.601 matrix, limited range. Tagging only; the conversion is the bridge's.
+static void set_v4l2_yuv_colorimetry(struct v4l2_pix_format_mplane *pix)
 {
-    return height > 576;
-}
-
-static COLOR_GAMUT_E color_gamut_for_height(RK_U32 height)
-{
-    return is_hd_video(height) ? COLOR_GAMUT_BT709 : COLOR_GAMUT_BT601;
-}
-
-static void set_v4l2_yuv_colorimetry(struct v4l2_pix_format_mplane *pix, RK_U32 height)
-{
-    if (is_hd_video(height))
-    {
-        pix->colorspace = V4L2_COLORSPACE_REC709;
-        pix->ycbcr_enc = V4L2_YCBCR_ENC_709;
-    }
-    else
-    {
-        pix->colorspace = V4L2_COLORSPACE_SMPTE170M;
-        pix->ycbcr_enc = V4L2_YCBCR_ENC_601;
-    }
-
+    pix->colorspace = V4L2_COLORSPACE_REC709;
+    pix->ycbcr_enc = V4L2_YCBCR_ENC_601;
     pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
     pix->xfer_func = V4L2_XFER_FUNC_709;
 }
 
-static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal, RK_U32 height)
+static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
 {
     memset(video_signal, 0, sizeof(VENC_VUI_VIDEO_SIGNAL_S));
     video_signal->video_signal_type_present_flag = 1;
     video_signal->video_format = 5; // unspecified
     video_signal->video_full_range_flag = 0; // YUV video levels: black=16, white=235
     video_signal->colour_description_present_flag = 1;
-
-    if (is_hd_video(height))
-    {
-        video_signal->colour_primaries = 1; // BT.709
-        video_signal->transfer_characteristics = 1; // BT.709
-        video_signal->matrix_coefficients = 1; // BT.709
-    }
-    else
-    {
-        video_signal->colour_primaries = 6; // SMPTE 170M
-        video_signal->transfer_characteristics = 6; // SMPTE 170M
-        video_signal->matrix_coefficients = 6; // SMPTE 170M
-    }
+    video_signal->colour_primaries = 1; // BT.709 (sRGB desktop)
+    video_signal->transfer_characteristics = 1; // BT.709
+    video_signal->matrix_coefficients = 6; // BT.601 (SMPTE 170M), as converted by the bridge
 }
 
 static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 max_bitrate, RK_U32 width, RK_U32 height, RK_U32 fps)
@@ -217,7 +195,7 @@ static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 m
     stAttr->stVencAttr.enMirror = MIRROR_NONE;
 }
 
-static void venc_configure_limited_range_vui(RK_U32 height)
+static void venc_configure_limited_range_vui(void)
 {
     int32_t ret;
 
@@ -231,7 +209,7 @@ static void venc_configure_limited_range_vui(RK_U32 height)
             log_warn("RK_MPI_VENC_GetH265Vui failed: %#x", ret);
             return;
         }
-        configure_vui_video_signal(&stH265Vui.stVuiVideoSignal, height);
+        configure_vui_video_signal(&stH265Vui.stVuiVideoSignal);
         ret = RK_MPI_VENC_SetH265Vui(VENC_CHANNEL, &stH265Vui);
         if (ret != RK_SUCCESS)
         {
@@ -249,7 +227,7 @@ static void venc_configure_limited_range_vui(RK_U32 height)
             log_warn("RK_MPI_VENC_GetH264Vui failed: %#x", ret);
             return;
         }
-        configure_vui_video_signal(&stH264Vui.stVuiVideoSignal, height);
+        configure_vui_video_signal(&stH264Vui.stVuiVideoSignal);
         ret = RK_MPI_VENC_SetH264Vui(VENC_CHANNEL, &stH264Vui);
         if (ret != RK_SUCCESS)
         {
@@ -258,7 +236,7 @@ static void venc_configure_limited_range_vui(RK_U32 height)
         }
     }
 
-    log_info("configured VENC VUI as limited-range %s", is_hd_video(height) ? "BT.709" : "BT.601");
+    log_info("configured VENC VUI as limited-range, BT.601 matrix, BT.709 primaries/transfer");
 }
 
 pthread_t *venc_read_thread = NULL;
@@ -276,7 +254,7 @@ static int32_t venc_start(int32_t bitrate, int32_t max_bitrate, int32_t width, i
         return ret;
     }
 
-    venc_configure_limited_range_vui(height);
+    venc_configure_limited_range_vui();
 
     VENC_RECV_PIC_PARAM_S stRecvParam;
     memset(&stRecvParam, 0, sizeof(VENC_RECV_PIC_PARAM_S));
@@ -563,7 +541,7 @@ void *run_video_stream(void *arg)
         fmt.fmt.pix_mp.height = height;
         fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_YUYV;
         fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
-        set_v4l2_yuv_colorimetry(&fmt.fmt.pix_mp, height);
+        set_v4l2_yuv_colorimetry(&fmt.fmt.pix_mp);
 
         if (ioctl(video_dev_fd, VIDIOC_S_FMT, &fmt) < 0)
         {
@@ -691,7 +669,7 @@ void *run_video_stream(void *arg)
         stFrame.stVFrame.enVideoFormat = VIDEO_FORMAT_LINEAR;
         stFrame.stVFrame.enCompressMode = COMPRESS_MODE_NONE;
         stFrame.stVFrame.enDynamicRange = DYNAMIC_RANGE_SDR8;
-        stFrame.stVFrame.enColorGamut = color_gamut_for_height(height);
+        stFrame.stVFrame.enColorGamut = COLOR_GAMUT_BT601;
 
         while (streaming_flag)
         {
