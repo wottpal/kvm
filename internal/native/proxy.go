@@ -24,10 +24,10 @@ import (
 )
 
 const (
-	// The encoder's output buffer for the largest mode (1920x1200, 2 bytes
-	// per pixel, cgo/video.c): near-lossless still refreshes of a busy screen
-	// exceed the earlier 1920*1080/2.
-	maxFrameSize                   = 1920 * 1200 * 2
+	// Matches VENC_MAX_FRAME_BYTES in cgo/video.c, which caps the encoder's
+	// output buffer: near-lossless still refreshes of a busy screen exceed the
+	// earlier 1920*1080/2, and modes up to 2176x1200 at 2 bytes per pixel fit.
+	maxFrameSize                   = 6 << 20
 	defaultMaxRestartAttempts uint = 5
 )
 

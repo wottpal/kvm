@@ -20,7 +20,7 @@ typedef struct
 {
     int min_qp;           // 8-40
     int max_qp;           // min_qp-51
-    double gop_seconds;   // 0.5-60
+    double gop_seconds;   // 0.5-300
     bool aq;              // keep Rockchip texture-adaptive QP
     int max_fps;          // 1-120, 0 = source fps
     int bitrate_kbps;     // 100-50000, 0 = derived from the quality factor

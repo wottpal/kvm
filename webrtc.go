@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/nack"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/rs/zerolog"
@@ -530,7 +531,7 @@ func newSession(config SessionConfig) (*Session, error) {
 		}
 	}
 	interceptorRegistry := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
+	if err := registerInterceptors(mediaEngine, interceptorRegistry); err != nil {
 		scopedLogger.Warn().Err(err).Msg("Failed to register default interceptors")
 		return nil, err
 	}
@@ -788,4 +789,36 @@ func onLastSessionDisconnected() {
 	stopNativeVideo()
 	_ = applyHostDisplayAdvertisement("last_session_disconnected")
 	startVideoSleepModeTicker()
+}
+
+// nackHistoryPackets is the NACK responder's history. pion's default of 1024
+// packets (~1.2 MB) is shorter than a near-lossless still-screen keyframe
+// (up to ~2.5 MiB), so a loss early in one could not be repaired.
+const nackHistoryPackets = 4096
+
+// registerInterceptors is webrtc.RegisterDefaultInterceptors with a longer
+// NACK history.
+func registerInterceptors(mediaEngine *webrtc.MediaEngine, registry *interceptor.Registry) error {
+	generator, err := nack.NewGeneratorInterceptor()
+	if err != nil {
+		return err
+	}
+	responder, err := nack.NewResponderInterceptor(nack.ResponderSize(nackHistoryPackets))
+	if err != nil {
+		return err
+	}
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack"}, webrtc.RTPCodecTypeVideo)
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
+	registry.Add(responder)
+	registry.Add(generator)
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		return err
+	}
+	if err := webrtc.ConfigureSimulcastExtensionHeaders(mediaEngine); err != nil {
+		return err
+	}
+	if err := webrtc.ConfigureStatsInterceptor(registry); err != nil {
+		return err
+	}
+	return webrtc.ConfigureTWCCSender(mediaEngine, registry)
 }
