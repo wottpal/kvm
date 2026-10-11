@@ -277,6 +277,7 @@ message VideoEncoderParams {
   int32 max_fps = 5;
   int32 bitrate_kbps = 6;
   int32 max_bitrate_kbps = 7;
+  int32 still_qp = 8;
 }
 
 message VideoEncoderStatus {

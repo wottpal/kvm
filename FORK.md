@@ -191,6 +191,44 @@ It skips HTML comments and fenced code blocks.
   HDMI or restarting the stream.
 - **Remove when:** upstream offers equivalent runtime control.
 
+### D07 — Still-screen refresh
+
+- **Since:** 2026-10-11
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/cgo/video.c`
+  - `internal/native/cgo_linux.go`
+  - `internal/native/encoder_params.go`
+  - `internal/native/proxy.go`
+  - `internal/native/proto/native.proto`
+  - `internal/native/proto/native.pb.go`
+- **What:** half a second after the screen stops changing, one keyframe at QP `stillQp` (default 8) makes the still
+  picture near-lossless; the empty P-frames that follow keep it at no cost.
+  - **Detection** reads the encoder's own output, never frame pixels. Each P-frame's cost above the empty-frame
+    baseline (the smallest frame of the last one to two seconds, plus 150 bytes) feeds two decaying sums: over about
+    3 s, 2,000 bytes mark the picture as changed (typing does, a blinking caret does not); over about 0.1 s, the sum
+    tells when the changes have stopped. A frame above an eighth of the per-frame budget (1,500 bytes at least) and
+    any other keyframe count as changes.
+  - **Refresh:** a whole-frame ROI with absolute QP `stillQp` plus a keyframe request (D04's verified path). The
+    keyframe QP floor is permanently `stillQp`, since the encoder clamps ROI QPs to the frame type's floor; P-frames
+    keep `minQp`. Nothing touches rate-control parameters at runtime: changing them restarts MPP rate control, which
+    costs the next moving frames 2–7 dB.
+  - **Pacing:** refreshes are at least 1.5 s apart; a refresh above 1.5 MiB (a photo-heavy screen) raises the QP of
+    the next ones by 6, up to +24, and one below 768 KiB lowers it again.
+  - **Parameters:** `stillQp` (1–51; at or above `minQp` turns the refresh off) joins D06's parameters and
+    `JETKVM_VENC_STILL_QP` the env overrides. The GOP default becomes 60 s (`gopSeconds` up to 300).
+  - **Frame size:** the encoder's stream buffer and the native frame socket's limit (`maxFrameSize`) become 2 bytes
+    per pixel of 1920×1200 (4,608,000 bytes), and super frames re-encode above 2.5 MiB: a refresh sets its QP per
+    block, which the re-encode cannot raise.
+- **Why:** P-frames never refine a still picture: the encoder skips blocks whose residual is small, at any QP. Measured
+  on the JetKVM Desktop app's maximum level: light text 53.2 → 60.5 dB, colored text 28.1 → 51.5 dB (with the app's
+  color reconstruction), a still screen 0.54 → 0.08 Mbit/s.
+- **Trade-off:** other keyframes may go below `minQp` too. On a still desktop, keyframes from a PLI measured 103 KB
+  instead of 87 KB (default parameters) and 165 KB instead of 136 KB (minimum QP 10).
+- **Remove when:** upstream refines still screens.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

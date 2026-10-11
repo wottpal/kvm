@@ -19,6 +19,9 @@ type VideoEncoderParams struct {
 	// Explicit RC targets; 0 = derived from the stream quality factor.
 	BitrateKbps    int `json:"bitrateKbps"`
 	MaxBitrateKbps int `json:"maxBitrateKbps"`
+	// QP of the keyframe that refreshes a still screen (1-51; minQp or more
+	// turns the refresh off).
+	StillQP int `json:"stillQp"`
 }
 
 // VideoEncoderParamsUpdate is a partial VideoEncoderParams; nil fields keep
@@ -32,6 +35,7 @@ type VideoEncoderParamsUpdate struct {
 
 	BitrateKbps    *int `json:"bitrateKbps"`
 	MaxBitrateKbps *int `json:"maxBitrateKbps"`
+	StillQP        *int `json:"stillQp"`
 }
 
 // VideoEncoderStatus is the effective encoder configuration.
@@ -53,8 +57,8 @@ func (p VideoEncoderParams) Validate() error {
 		return fmt.Errorf("minQp must be 8-40, got %d", p.MinQP)
 	case p.MaxQP < p.MinQP || p.MaxQP > 51:
 		return fmt.Errorf("maxQp must be %d-51 (minQp-51), got %d", p.MinQP, p.MaxQP)
-	case !(p.GOPSeconds >= 0.5 && p.GOPSeconds <= 60):
-		return fmt.Errorf("gopSeconds must be 0.5-60, got %g", p.GOPSeconds)
+	case !(p.GOPSeconds >= 0.5 && p.GOPSeconds <= 300):
+		return fmt.Errorf("gopSeconds must be 0.5-300, got %g", p.GOPSeconds)
 	case p.MaxFPS < 0 || p.MaxFPS > 120:
 		return fmt.Errorf("maxFps must be 1-120, or 0 for the source rate, got %d", p.MaxFPS)
 	case p.BitrateKbps != 0 && (p.BitrateKbps < 100 || p.BitrateKbps > 50000):
@@ -63,6 +67,8 @@ func (p VideoEncoderParams) Validate() error {
 		return fmt.Errorf("maxBitrateKbps must be 100-50000, or 0 for 1.5x the target, got %d", p.MaxBitrateKbps)
 	case p.BitrateKbps != 0 && p.MaxBitrateKbps != 0 && p.MaxBitrateKbps < p.BitrateKbps:
 		return fmt.Errorf("maxBitrateKbps (%d) must be >= bitrateKbps (%d)", p.MaxBitrateKbps, p.BitrateKbps)
+	case p.StillQP < 1 || p.StillQP > 51:
+		return fmt.Errorf("stillQp must be 1-51, got %d", p.StillQP)
 	}
 	return nil
 }
@@ -90,6 +96,9 @@ func (u VideoEncoderParamsUpdate) ApplyTo(p VideoEncoderParams) VideoEncoderPara
 	if u.MaxBitrateKbps != nil {
 		p.MaxBitrateKbps = *u.MaxBitrateKbps
 	}
+	if u.StillQP != nil {
+		p.StillQP = *u.StillQP
+	}
 	return p
 }
 
@@ -109,6 +118,7 @@ func (p VideoEncoderParams) toProto() *pb.VideoEncoderParams {
 		MaxFps:         int32(p.MaxFPS),
 		BitrateKbps:    int32(p.BitrateKbps),
 		MaxBitrateKbps: int32(p.MaxBitrateKbps),
+		StillQp:        int32(p.StillQP),
 	}
 }
 
@@ -121,6 +131,7 @@ func videoEncoderParamsFromProto(p *pb.VideoEncoderParams) VideoEncoderParams {
 		MaxFPS:         int(p.GetMaxFps()),
 		BitrateKbps:    int(p.GetBitrateKbps()),
 		MaxBitrateKbps: int(p.GetMaxBitrateKbps()),
+		StillQP:        int(p.GetStillQp()),
 	}
 }
 

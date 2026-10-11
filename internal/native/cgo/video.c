@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -158,11 +159,12 @@ static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
     {                                 \
         .min_qp = 18,                 \
         .max_qp = 42,                 \
-        .gop_seconds = 4.0,           \
+        .gop_seconds = 60.0,          \
         .aq = false,                  \
         .max_fps = 0,                 \
         .bitrate_kbps = 0,            \
         .max_bitrate_kbps = 0,        \
+        .still_qp = 8,                \
     }
 static jetkvm_venc_params_t venc_params = VENC_PARAMS_COMPILED_DEFAULTS;
 // Compiled defaults with env overrides applied (venc_params_load_env).
@@ -196,7 +198,7 @@ static double env_gop_seconds(double def)
     }
     char *end = NULL;
     double seconds = strtod(s, &end);
-    if (*end != '\0' || !(seconds >= 0.5 && seconds <= 60.0))
+    if (*end != '\0' || !(seconds >= 0.5 && seconds <= 300.0))
     {
         log_notice("ignoring invalid JETKVM_VENC_GOP_SECONDS=%.32s, using 0.5", s);
         return 0.5;
@@ -212,6 +214,7 @@ static void venc_params_load_env(void)
     p->gop_seconds = env_gop_seconds(p->gop_seconds);
     p->aq = env_u32("JETKVM_VENC_AQ", p->aq, 0, 1) == 1;
     p->max_fps = env_u32("JETKVM_VENC_MAX_FPS", p->max_fps, 0, 120);
+    p->still_qp = env_u32("JETKVM_VENC_STILL_QP", p->still_qp, 1, 51);
     venc_params_defaults = *p;
 }
 
@@ -227,7 +230,8 @@ static bool venc_params_valid(const jetkvm_venc_params_t *p)
 {
     return p->min_qp >= 8 && p->min_qp <= 40 &&
            p->max_qp >= p->min_qp && p->max_qp <= 51 &&
-           p->gop_seconds >= 0.5 && p->gop_seconds <= 60.0 &&
+           p->gop_seconds >= 0.5 && p->gop_seconds <= 300.0 &&
+           p->still_qp >= 1 && p->still_qp <= 51 &&
            p->max_fps >= 0 && p->max_fps <= 120 &&
            (p->bitrate_kbps == 0 || (p->bitrate_kbps >= 100 && p->bitrate_kbps <= 50000)) &&
            (p->max_bitrate_kbps == 0 || (p->max_bitrate_kbps >= 100 && p->max_bitrate_kbps <= 50000)) &&
@@ -309,7 +313,9 @@ static void populate_venc_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U32 m
     stAttr->stVencAttr.u32VirWidth = RK_ALIGN_16(width);
     stAttr->stVencAttr.u32VirHeight = RK_ALIGN_16(height);
     stAttr->stVencAttr.u32StreamBufCnt = 3;
-    stAttr->stVencAttr.u32BufSize = width * height * 3 / 2;
+    // Twice the raw 4:2:0 size: a near-lossless refresh of a busy screen can
+    // approach the raw size (internal/native/proxy.go's maxFrameSize matches).
+    stAttr->stVencAttr.u32BufSize = width * height * 2;
     stAttr->stVencAttr.enMirror = MIRROR_NONE;
 }
 
@@ -357,17 +363,19 @@ static void venc_configure_limited_range_vui(void)
     log_notice("configured VENC VUI as limited-range, BT.601 matrix, BT.709 primaries/transfer");
 }
 
-// Re-encode any frame above this size so it never trips the 1,036,800-byte
-// maxFrameSize check in internal/native/proxy.go (which kills the stream).
-#define VENC_SUPER_FRAME_BITS (800u * 1024u * 8u)
+// Re-encode any frame above this size. Still refreshes set their QP per block
+// (an ROI), which the re-encode cannot raise; the stream buffer and
+// internal/native/proxy.go's maxFrameSize leave room above it (2 bytes per
+// pixel of the largest mode).
+#define VENC_SUPER_FRAME_BITS (2560u * 1024u * 8u)
 
-#define VENC_APPLY_QP_LIMITS(p, min_qp, max_qp, max_iqp) \
+#define VENC_APPLY_QP_LIMITS(p, min_qp, min_iqp, max_qp, max_iqp) \
     do                                                   \
     {                                                    \
         (p).u32MinQp = (min_qp);                         \
-        (p).u32MinIQp = (min_qp);                        \
+        (p).u32MinIQp = (min_iqp);                       \
         (p).u32FrmMinQp = (min_qp);                      \
-        (p).u32FrmMinIQp = (min_qp);                     \
+        (p).u32FrmMinIQp = (min_iqp);                    \
         (p).u32MaxQp = (max_qp);                         \
         (p).u32FrmMaxQp = (max_qp);                      \
         (p).u32MaxIQp = (max_iqp);                       \
@@ -386,6 +394,11 @@ static bool venc_default_rc2_valid = false;
 static bool venc_configure_rc_for_desktop(const jetkvm_venc_params_t *p, bool hevc)
 {
     const RK_U32 min_qp = p->min_qp;
+    // Keyframes may go down to still_qp: the still refresh is one (the
+    // encoder clamps ROI QPs to the frame type's floor). Other keyframes
+    // get the lower floor too; on a still desktop a PLI keyframe measured
+    // ~20% larger. Moving the floor per refresh would restart rate control.
+    const RK_U32 min_iqp = p->still_qp < p->min_qp ? p->still_qp : p->min_qp;
     const RK_U32 max_qp = p->max_qp;
     const RK_U32 max_iqp = max_qp >= min_qp + 2 ? max_qp - 2 : max_qp;
     bool ok = true;
@@ -398,11 +411,11 @@ static bool venc_configure_rc_for_desktop(const jetkvm_venc_params_t *p, bool he
     {
         if (hevc)
         {
-            VENC_APPLY_QP_LIMITS(stRcParam.stParamH265, min_qp, max_qp, max_iqp);
+            VENC_APPLY_QP_LIMITS(stRcParam.stParamH265, min_qp, min_iqp, max_qp, max_iqp);
         }
         else
         {
-            VENC_APPLY_QP_LIMITS(stRcParam.stParamH264, min_qp, max_qp, max_iqp);
+            VENC_APPLY_QP_LIMITS(stRcParam.stParamH264, min_qp, min_iqp, max_qp, max_iqp);
         }
         ret = RK_MPI_VENC_SetRcParam(VENC_CHANNEL, &stRcParam);
     }
@@ -438,8 +451,8 @@ static bool venc_configure_rc_for_desktop(const jetkvm_venc_params_t *p, bool he
         ok = false;
     }
 
-    log_notice("configured VENC RC: qp %u-%u (I max %u), aq %s%s",
-               min_qp, max_qp, max_iqp, p->aq ? "rockchip default" : "off", ok ? "" : " (with errors)");
+    log_notice("configured VENC RC: qp %u-%u (I %u-%u), aq %s%s",
+               min_qp, max_qp, min_iqp, max_iqp, p->aq ? "rockchip default" : "off", ok ? "" : " (with errors)");
     return ok;
 }
 
@@ -482,6 +495,195 @@ static struct
     RK_U32 max_bitrate;
 } venc_live;
 
+// Still-screen refresh. Encoded frames tell whether the screen changes: a
+// still screen gives nearly empty P-frames. After any change, once the
+// screen has settled for half a second, one keyframe is encoded at still_qp
+// (a whole-frame ROI with absolute QP; keyframes may go that low, P-frames
+// stay at min_qp or above), so the still picture becomes near-lossless. The
+// P-frames that follow skip unchanged blocks and keep it at no cost.
+// P-frames alone never get there: the encoder skips blocks whose residual is
+// small, at any QP. Nothing here touches rate control (changing RC
+// parameters restarts it, which costs the next moving frames quality).
+//
+// What counts as a change, measured on a Mac desktop at QP 10: empty
+// P-frames are 150-460 bytes depending on the screen, a typed glyph 530-1000,
+// a blinking caret a few hundred bytes a second. Each P-frame's cost above
+// the empty-frame baseline (the smallest frame of the last one to two
+// seconds) plus STILL_NOISE_BYTES feeds two decaying sums: over about three
+// seconds it marks the picture dirty at STILL_DIRTY_BYTES (typing gets
+// there, a caret does not), over about a tenth of a second it tells when the
+// changes have stopped. A frame above a budget/8 (STILL_QUIET_MIN_BYTES at
+// least) is a real change. Any other keyframe (session start, packet loss,
+// GOP) counts as one too. Refreshes are at least STILL_MIN_INTERVAL_US apart,
+// and a refresh above STILL_LARGE_REFRESH (a photo-heavy screen) raises the
+// QP of the next ones. Encoder output thread only.
+#define STILL_NOISE_BYTES 150
+#define STILL_DIRTY_BYTES 2000.0
+#define STILL_SETTLED_BYTES 100.0
+#define STILL_QUIET_MIN_BYTES 1500
+#define STILL_MIN_INTERVAL_US 1500000
+#define STILL_REFRESH_MAX_FRAMES 8
+// P-frames encoded while the ROI was still on belong to the refresh.
+#define STILL_COOLDOWN_FRAMES 4
+#define STILL_ROI_INDEX 7
+#define STILL_LARGE_REFRESH (1536u * 1024u)
+#define STILL_SMALL_REFRESH (768u * 1024u)
+#define STILL_BOOST_STEP 6
+#define STILL_BOOST_MAX 24
+
+static struct
+{
+    unsigned quiet;      // frames since the last real change
+    bool dirty;          // the picture changed since the last refresh
+    double window;       // decaying sum of change bytes over ~3 s
+    double recent;       // decaying sum over ~0.1 s
+    size_t floor_now;    // smallest P-frame of this baseline window
+    size_t floor_prev;   // ... and of the previous one
+    unsigned floor_frames;
+    unsigned refreshing; // frames encoded since the refresh started (0 = none)
+    bool roi_on;         // the ROI is set (also if turning it off failed)
+    unsigned cooldown;   // frames still to ignore after a refresh
+    int boost;           // added to still_qp after large refreshes
+    uint64_t last_refresh_us;
+    bool warned;
+} still;
+
+static void still_reset(void)
+{
+    memset(&still, 0, sizeof(still));
+    still.floor_now = SIZE_MAX;
+    still.floor_prev = SIZE_MAX;
+}
+
+// Caller holds venc_state_mutex with venc_running set.
+static bool still_set_roi_locked(bool enable, int qp)
+{
+    VENC_ROI_ATTR_S roi;
+    memset(&roi, 0, sizeof(roi));
+    roi.u32Index = STILL_ROI_INDEX;
+    roi.bEnable = enable ? RK_TRUE : RK_FALSE;
+    roi.bAbsQp = RK_TRUE;
+    roi.s32Qp = qp;
+    roi.bIntra = RK_FALSE;
+    roi.stRect.s32X = 0;
+    roi.stRect.s32Y = 0;
+    roi.stRect.u32Width = venc_live.width;
+    roi.stRect.u32Height = venc_live.height;
+    const int32_t ret = RK_MPI_VENC_SetRoiAttr(VENC_CHANNEL, &roi);
+    if (ret != RK_SUCCESS)
+    {
+        log_error("still refresh ROI %s failed: %#x", enable ? "on" : "off", ret);
+        return false;
+    }
+    return true;
+}
+
+// Takes venc_state_mutex itself (defined with the keyframe paths).
+static void still_request_keyframe(void);
+
+// Called for every encoded frame with its size, after the frame went out.
+static void still_on_frame(size_t len, bool idr)
+{
+    pthread_mutex_lock(&venc_state_mutex);
+    const bool running = venc_running;
+    const RK_U32 fps = venc_live.encode_fps > 0 ? venc_live.encode_fps : 60;
+    const size_t budget = (size_t)venc_live.bitrate * 1000 / 8 / fps;
+    const int still_qp = venc_live.params.still_qp, min_qp = venc_live.params.min_qp;
+    const bool ending = still.refreshing > 0 && (idr || still.refreshing + 1 > STILL_REFRESH_MAX_FRAMES);
+    // Turn the ROI off once the refresh is out; retried every frame if the
+    // call fails (a lingering whole-frame absolute QP would pin every frame).
+    if (still.roi_on && (ending || still.refreshing == 0) && running && still_set_roi_locked(false, 0))
+    {
+        still.roi_on = false;
+    }
+    pthread_mutex_unlock(&venc_state_mutex);
+
+    if (still.refreshing > 0)
+    {
+        still.refreshing++;
+        if (!ending)
+        {
+            return;
+        }
+        if (idr)
+        {
+            if (len > STILL_LARGE_REFRESH && still.boost < STILL_BOOST_MAX)
+                still.boost += STILL_BOOST_STEP;
+            else if (len < STILL_SMALL_REFRESH && still.boost > 0)
+                still.boost -= STILL_BOOST_STEP;
+            log_info("still refresh: keyframe %u bytes", (unsigned)len);
+        }
+        else if (!still.warned)
+        {
+            still.warned = true;
+            log_notice("still refresh: the keyframe request produced no keyframe (logged once)");
+        }
+        still.refreshing = 0;
+        still.quiet = 0;
+        still.cooldown = STILL_COOLDOWN_FRAMES;
+        return;
+    }
+    if (still.cooldown > 0 && !idr)
+    {
+        still.cooldown--;
+        return;
+    }
+    if (idr)
+    {
+        still.quiet = 0;
+        still.dirty = true;
+        return;
+    }
+
+    // Empty-frame baseline over one to two seconds.
+    if (len < still.floor_now)
+        still.floor_now = len;
+    if (++still.floor_frames >= fps)
+    {
+        still.floor_prev = still.floor_now;
+        still.floor_now = SIZE_MAX;
+        still.floor_frames = 0;
+    }
+    const size_t floor = still.floor_now < still.floor_prev ? still.floor_now : still.floor_prev;
+    const double change = floor != SIZE_MAX && len > floor + STILL_NOISE_BYTES ? (double)(len - floor - STILL_NOISE_BYTES) : 0.0;
+    still.window = still.window * (1.0 - 1.0 / (3.0 * fps)) + change;
+    still.recent = still.recent * 0.9 + change;
+    const size_t quiet_max = budget / 8 > STILL_QUIET_MIN_BYTES ? budget / 8 : STILL_QUIET_MIN_BYTES;
+    if (len >= quiet_max)
+    {
+        still.quiet = 0;
+        still.dirty = true;
+        return;
+    }
+    if (still.window >= STILL_DIRTY_BYTES)
+        still.dirty = true;
+    if (!still.dirty || ++still.quiet < fps / 2 || still.recent >= STILL_SETTLED_BYTES || still_qp >= min_qp || !running)
+    {
+        return;
+    }
+    const uint64_t now = get_us();
+    if (now - still.last_refresh_us < STILL_MIN_INTERVAL_US)
+    {
+        return;
+    }
+    const int qp = still_qp + still.boost < min_qp ? still_qp + still.boost : min_qp;
+    pthread_mutex_lock(&venc_state_mutex);
+    const bool started = venc_running && still_set_roi_locked(true, qp);
+    if (started)
+        still.roi_on = true;
+    pthread_mutex_unlock(&venc_state_mutex);
+    if (!started)
+    {
+        return;
+    }
+    still_request_keyframe();
+    still.refreshing = 1;
+    still.dirty = false;
+    still.window = 0;
+    still.recent = 0;
+    still.last_refresh_us = now;
+}
+
 static void venc_set_running(bool running)
 {
     pthread_mutex_lock(&venc_state_mutex);
@@ -505,6 +707,7 @@ static int32_t venc_start(RK_U32 width, RK_U32 height, RK_U32 source_fps)
     venc_live.gop = venc_gop_frames(venc_live.encode_fps, params.gop_seconds);
     venc_live.gop_nudge = 0;
     venc_bitrates(&params, width, height, &venc_live.bitrate, &venc_live.max_bitrate);
+    still_reset();
 
     populate_venc_attr(&stAttr, venc_live.bitrate, venc_live.max_bitrate, width, height,
                        venc_live.encode_fps, venc_live.gop);
@@ -586,7 +789,7 @@ static bool venc_apply_live_locked(const jetkvm_venc_params_t *p)
     }
 
     if (p->min_qp != venc_live.params.min_qp || p->max_qp != venc_live.params.max_qp ||
-        p->aq != venc_live.params.aq)
+        p->aq != venc_live.params.aq || p->still_qp != venc_live.params.still_qp)
     {
         if (!venc_configure_rc_for_desktop(p, venc_live.hevc))
         {
@@ -669,7 +872,7 @@ static bool annexb_is_idr(const uint8_t *data, size_t len, bool hevc)
     return false;
 }
 
-static void venc_count_output(const uint8_t *data, size_t len)
+static bool venc_count_output(const uint8_t *data, size_t len)
 {
     const bool idr = annexb_is_idr(data, len, venc_live.hevc);
     pthread_mutex_lock(&venc_out_mutex);
@@ -684,6 +887,7 @@ static void venc_count_output(const uint8_t *data, size_t len)
     {
         log_info("VENC IDR frame: %u bytes", (unsigned)len);
     }
+    return idr;
 }
 
 // MPP forces an IDR and resends SPS/PPS when the GOP length changes
@@ -729,7 +933,9 @@ static const char *const kf_path_names[KF_PATH_COUNT] = {
 #define KF_NOT_RUNNING 1
 
 static pthread_mutex_t kf_mutex = PTHREAD_MUTEX_INITIALIZER;
-static int kf_path = KF_REQUEST_IDR_INSTANT; // first path to try; the last one that worked
+// First path to try; the last one that worked. Atomic: the still refresh
+// (encoder output thread) reads it.
+static atomic_int kf_path = KF_REQUEST_IDR_INSTANT;
 static int kf_path_logged = -1;
 
 static int32_t kf_issue(int path, RK_U32 *encode_fps)
@@ -805,7 +1011,7 @@ int video_request_keyframe()
 {
     int32_t status = -1;
     pthread_mutex_lock(&kf_mutex);
-    for (int path = kf_path; path < KF_PATH_COUNT; path++)
+    for (int path = atomic_load(&kf_path); path < KF_PATH_COUNT; path++)
     {
         pthread_mutex_lock(&venc_out_mutex);
         const uint64_t frames0 = venc_out_frames;
@@ -833,7 +1039,7 @@ int video_request_keyframe()
             continue;
         }
         // Seen, or nothing to judge by (no frames flowing): keep this path.
-        kf_path = path;
+        atomic_store(&kf_path, path);
         if (result == KF_SEEN && kf_path_logged != path)
         {
             log_notice("keyframe requests use %s", kf_path_names[path]);
@@ -845,10 +1051,18 @@ int video_request_keyframe()
     if (status != 0)
     {
         log_error("all keyframe paths failed; next request starts over");
-        kf_path = KF_REQUEST_IDR_INSTANT;
+        atomic_store(&kf_path, KF_REQUEST_IDR_INSTANT);
     }
     pthread_mutex_unlock(&kf_mutex);
     return status;
+}
+
+// The still refresh's keyframe, by the path video_request_keyframe found to
+// work (not verified here: this is the thread that would see the IDR).
+static void still_request_keyframe(void)
+{
+    RK_U32 encode_fps = 0;
+    kf_issue(atomic_load(&kf_path), &encode_fps);
 }
 
 struct buffer
@@ -974,13 +1188,15 @@ static void *venc_read_stream(void *arg)
                    loopCount, stFrame.u32Seq, stFrame.pstPack->u32Len,
                    stFrame.pstPack->u64PTS, nowUs - stFrame.pstPack->u64PTS);
             pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
-            venc_count_output(pData, stFrame.pstPack->u32Len);
-            video_send_frame(pData, (ssize_t)stFrame.pstPack->u32Len);
+            const size_t len = stFrame.pstPack->u32Len;
+            const bool idr = venc_count_output(pData, len);
+            video_send_frame(pData, (ssize_t)len);
             s32Ret = RK_MPI_VENC_ReleaseStream(VENC_CHANNEL, &stFrame);
             if (s32Ret != RK_SUCCESS)
             {
                 log_error("RK_MPI_VENC_ReleaseStream fail %x", s32Ret);
             }
+            still_on_frame(len, idr);
             loopCount++;
         }
         else
@@ -1565,7 +1781,7 @@ void video_reset_encoder_params(void)
     const bool changed = p->min_qp != d->min_qp || p->max_qp != d->max_qp ||
                          p->gop_seconds != d->gop_seconds || p->aq != d->aq ||
                          p->max_fps != d->max_fps || p->bitrate_kbps != d->bitrate_kbps ||
-                         p->max_bitrate_kbps != d->max_bitrate_kbps;
+                         p->max_bitrate_kbps != d->max_bitrate_kbps || p->still_qp != d->still_qp;
     venc_params = venc_params_defaults;
     pthread_mutex_unlock(&venc_params_mutex);
     if (changed)
@@ -1601,8 +1817,8 @@ int video_set_encoder_params(const jetkvm_venc_params_t *params)
     pthread_mutex_lock(&venc_params_mutex);
     venc_params = *params;
     pthread_mutex_unlock(&venc_params_mutex);
-    log_notice("encoder params set: qp %d-%d, gop %.1f s, aq %s, max fps %d, bitrate %d/%d kbps (0 = auto)",
-               params->min_qp, params->max_qp, params->gop_seconds,
+    log_notice("encoder params set: qp %d-%d (still %d), gop %.1f s, aq %s, max fps %d, bitrate %d/%d kbps (0 = auto)",
+               params->min_qp, params->max_qp, params->still_qp, params->gop_seconds,
                params->aq ? "rockchip default" : "off", params->max_fps,
                params->bitrate_kbps, params->max_bitrate_kbps);
     // No running channel: the next venc_start() picks the values up.
