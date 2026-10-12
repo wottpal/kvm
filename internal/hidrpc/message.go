@@ -189,6 +189,25 @@ func (m *Message) MouseReport() (MouseReport, error) {
 	}, nil
 }
 
+// WheelReport is a wheel step: vertical, then horizontal (D12). A
+// one-byte report is vertical only.
+type WheelReport struct {
+	WheelY int8
+	WheelX int8
+}
+
+// WheelReport returns the wheel report from the message.
+func (m *Message) WheelReport() (WheelReport, error) {
+	if m.t != TypeWheelReport || len(m.d) < 1 {
+		return WheelReport{}, fmt.Errorf("invalid wheel report: type %d, %d bytes", m.t, len(m.d))
+	}
+	r := WheelReport{WheelY: int8(m.d[0])}
+	if len(m.d) > 1 {
+		r.WheelX = int8(m.d[1])
+	}
+	return r, nil
+}
+
 type KeyboardMacroState struct {
 	State   bool
 	IsPaste bool

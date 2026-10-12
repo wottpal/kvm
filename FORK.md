@@ -325,6 +325,23 @@ It skips HTML comments and fenced code blocks.
   keyframe every 0.5 s; tearing starts ~1.3 ms below the automatic offset (P-frames ~2 ms below).
 - **Remove when:** never (the hardware path, an ISP/DVBM wrap, needs device-tree changes outside this fork).
 
+### D12 — Wheel reports over HID-RPC
+
+- **Since:** 2026-10-13
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `hidrpc.go`
+  - `internal/hidrpc/message.go`
+  - `jsonrpc.go`
+- **What:** HID-RPC message 0x04 (vertical, horizontal wheel step; one byte is vertical only) goes to the pointer's queue
+  and the wheel report. The `getFirmwareFeatures` RPC lists the fork's protocol additions (`hidrpcWheel`), so a client uses
+  them only where they exist. Upstream defines 0x04 but never handles it.
+- **Why:** wheel steps went over JSON-RPC: each one a goroutine, JSON parsing and a reply on the single core, and no
+  order between steps or against pointer moves. Single steps measured the same to the screen on a Mac host (83 ms
+  either way, full screen); the gain is order and device CPU while scrolling fast.
+- **Remove when:** upstream handles wheel reports over HID-RPC.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

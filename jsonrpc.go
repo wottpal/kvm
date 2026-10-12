@@ -200,6 +200,13 @@ func rpcSetStreamQualityFactor(factor float64) error {
 	return nil
 }
 
+// rpcGetFirmwareFeatures names the fork's protocol additions, so clients
+// use them only where they exist (D12). "hidrpcWheel": wheel reports over
+// HID-RPC (0x04: vertical, horizontal), in order with pointer reports.
+func rpcGetFirmwareFeatures() []string {
+	return []string{"hidrpcWheel"}
+}
+
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
 	return nativeInstance.VideoGetEncoderParams()
 }
@@ -1524,6 +1531,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getStreamQualityFactor":     {Func: rpcGetStreamQualityFactor},
 	"setStreamQualityFactor":     {Func: rpcSetStreamQualityFactor, Params: []string{"factor"}},
 	"getVideoEncoderParams":      {Func: rpcGetVideoEncoderParams},
+	"getFirmwareFeatures":        {Func: rpcGetFirmwareFeatures},
 	"setVideoEncoderParams":      {Func: rpcSetVideoEncoderParams, Params: []string{"params"}},
 	"requestKeyframe":            {Func: rpcRequestKeyframe},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
