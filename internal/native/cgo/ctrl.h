@@ -26,7 +26,22 @@ typedef struct
     int bitrate_kbps;     // 100-50000, 0 = derived from the quality factor
     int max_bitrate_kbps; // 100-50000 (>= bitrate_kbps), 0 = 1.5x target
     int still_qp;         // 1-51: QP of the keyframe that refreshes a still screen (>= min_qp: off)
+    bool auto_refresh;    // the still refresh starts on its own (else only on request)
 } jetkvm_venc_params_t;
+
+// A region to refresh, in frame pixels (video_refresh_regions).
+typedef struct
+{
+    int x;
+    int y;
+    int w;
+    int h;
+} jetkvm_rect_t;
+
+// video_refresh_regions results other than 0.
+#define JETKVM_REFRESH_INVALID (-1) // rect count, qp or frames out of range
+#define JETKVM_REFRESH_NOT_STREAMING (-2)
+#define JETKVM_REFRESH_OUTSIDE (-3) // a rect lies outside the frame
 
 typedef struct
 {
@@ -85,6 +100,7 @@ void jetkvm_video_stop();
 uint8_t jetkvm_video_get_streaming_status();
 int jetkvm_video_request_keyframe();
 int jetkvm_video_set_encoder_params(const jetkvm_venc_params_t *params);
+int jetkvm_video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, int frames);
 void jetkvm_video_get_encoder_status(jetkvm_venc_status_t *status);
 void jetkvm_video_reset_encoder_params(void);
 int jetkvm_video_set_quality_factor(float quality_factor);
@@ -100,6 +116,7 @@ void video_report_format(bool ready, const char *error, u_int16_t width, u_int16
 void video_send_format_report();
 int video_send_frame(const uint8_t *frame, ssize_t len);
 int video_set_encoder_params(const jetkvm_venc_params_t *params);
+int video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, int frames);
 void video_get_encoder_status(jetkvm_venc_status_t *status);
 void video_reset_encoder_params(void);
 

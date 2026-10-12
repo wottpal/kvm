@@ -22,6 +22,9 @@ type VideoEncoderParams struct {
 	// QP of the keyframe that refreshes a still screen (1-51; minQp or more
 	// turns the refresh off).
 	StillQP int `json:"stillQp"`
+	// AutoRefresh lets the device start still refreshes on its own; a client
+	// that drives them (refreshRegions, D13) turns it off.
+	AutoRefresh bool `json:"autoRefresh"`
 }
 
 // VideoEncoderParamsUpdate is a partial VideoEncoderParams; nil fields keep
@@ -33,9 +36,10 @@ type VideoEncoderParamsUpdate struct {
 	AQ         *bool    `json:"aq"`
 	MaxFPS     *int     `json:"maxFps"`
 
-	BitrateKbps    *int `json:"bitrateKbps"`
-	MaxBitrateKbps *int `json:"maxBitrateKbps"`
-	StillQP        *int `json:"stillQp"`
+	BitrateKbps    *int  `json:"bitrateKbps"`
+	MaxBitrateKbps *int  `json:"maxBitrateKbps"`
+	StillQP        *int  `json:"stillQp"`
+	AutoRefresh    *bool `json:"autoRefresh"`
 }
 
 // VideoEncoderStatus is the effective encoder configuration.
@@ -106,6 +110,9 @@ func (u VideoEncoderParamsUpdate) ApplyTo(p VideoEncoderParams) VideoEncoderPara
 	if u.StillQP != nil {
 		p.StillQP = *u.StillQP
 	}
+	if u.AutoRefresh != nil {
+		p.AutoRefresh = *u.AutoRefresh
+	}
 	return p
 }
 
@@ -126,6 +133,7 @@ func (p VideoEncoderParams) toProto() *pb.VideoEncoderParams {
 		BitrateKbps:    int32(p.BitrateKbps),
 		MaxBitrateKbps: int32(p.MaxBitrateKbps),
 		StillQp:        int32(p.StillQP),
+		AutoRefresh:    p.AutoRefresh,
 	}
 }
 
@@ -139,6 +147,7 @@ func videoEncoderParamsFromProto(p *pb.VideoEncoderParams) VideoEncoderParams {
 		BitrateKbps:    int(p.GetBitrateKbps()),
 		MaxBitrateKbps: int(p.GetMaxBitrateKbps()),
 		StillQP:        int(p.GetStillQp()),
+		AutoRefresh:    p.GetAutoRefresh(),
 	}
 }
 

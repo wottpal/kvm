@@ -4,6 +4,7 @@ import (
 	"context"
 
 	pb "github.com/jetkvm/kvm/internal/native/proto"
+	"github.com/jetkvm/kvm/internal/native/refresh"
 )
 
 // Below are generated methods, do not edit manually
@@ -102,6 +103,19 @@ func (c *GRPCClient) VideoGetEncoderParams() (VideoEncoderStatus, error) {
 
 func (c *GRPCClient) VideoSetEncoderParams(params VideoEncoderParams) error {
 	_, err := c.client.VideoSetEncoderParams(context.Background(), params.toProto())
+	return err
+}
+
+func (c *GRPCClient) VideoRefreshRegions(req refresh.Request) error {
+	rects := make([]*pb.VideoRect, len(req.Rects))
+	for i, r := range req.Rects {
+		rects[i] = &pb.VideoRect{X: int32(r.X), Y: int32(r.Y), W: int32(r.W), H: int32(r.H)}
+	}
+	_, err := c.client.VideoRefreshRegions(context.Background(), &pb.VideoRefreshRegionsRequest{
+		Rects:  rects,
+		Qp:     int32(req.QP),
+		Frames: int32(req.Frames),
+	})
 	return err
 }
 

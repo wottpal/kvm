@@ -6,10 +6,12 @@
 package native
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"unsafe"
 
+	"github.com/jetkvm/kvm/internal/native/refresh"
 	"github.com/rs/zerolog"
 )
 
@@ -195,6 +197,7 @@ func videoGetEncoderStatus() VideoEncoderStatus {
 			BitrateKbps:    int(s.params.bitrate_kbps),
 			MaxBitrateKbps: int(s.params.max_bitrate_kbps),
 			StillQP:        int(s.params.still_qp),
+			AutoRefresh:    bool(s.params.auto_refresh),
 		},
 		SourceFPS:               int(s.source_fps),
 		EncodeFPS:               int(s.encode_fps),
@@ -219,6 +222,7 @@ func videoSetEncoderParams(params VideoEncoderParams) error {
 		bitrate_kbps:     C.int(params.BitrateKbps),
 		max_bitrate_kbps: C.int(params.MaxBitrateKbps),
 		still_qp:         C.int(params.StillQP),
+		auto_refresh:     C.bool(params.AutoRefresh),
 	}
 	if ret := C.jetkvm_video_set_encoder_params(&cParams); ret != 0 {
 		return fmt.Errorf("failed to set encoder params: %d", ret)
@@ -231,6 +235,25 @@ func videoResetEncoderParams() {
 	defer cgoLock.Unlock()
 
 	C.jetkvm_video_reset_encoder_params()
+}
+
+// videoRefreshRegions takes a validated request. Like videoRequestKeyframe it
+// does not take cgoLock; video.c orders it against encoder teardown.
+func videoRefreshRegions(req refresh.Request) error {
+	var rects [refresh.MaxRects]C.jetkvm_rect_t
+	for i, r := range req.Rects {
+		rects[i] = C.jetkvm_rect_t{x: C.int(r.X), y: C.int(r.Y), w: C.int(r.W), h: C.int(r.H)}
+	}
+	switch ret := C.jetkvm_video_refresh_regions(&rects[0], C.int(len(req.Rects)), C.int(req.QP), C.int(req.Frames)); ret {
+	case 0:
+		return nil
+	case C.JETKVM_REFRESH_NOT_STREAMING:
+		return errors.New("video is not streaming")
+	case C.JETKVM_REFRESH_OUTSIDE:
+		return errors.New("a rect lies outside the frame")
+	default:
+		return fmt.Errorf("invalid region refresh: %d", ret)
+	}
 }
 
 func videoGetStreamingStatus() VideoStreamingStatus {

@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/jetkvm/kvm/internal/native/proto"
+	"github.com/jetkvm/kvm/internal/native/refresh"
 )
 
 // Below are generated methods, do not edit manually
@@ -116,6 +117,18 @@ func (s *grpcServer) VideoGetEncoderParams(ctx context.Context, req *pb.Empty) (
 func (s *grpcServer) VideoSetEncoderParams(ctx context.Context, req *pb.VideoEncoderParams) (*pb.Empty, error) {
 	if err := s.native.VideoSetEncoderParams(videoEncoderParamsFromProto(req)); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return &pb.Empty{}, nil
+}
+
+func (s *grpcServer) VideoRefreshRegions(ctx context.Context, req *pb.VideoRefreshRegionsRequest) (*pb.Empty, error) {
+	rects := make([]refresh.Rect, len(req.GetRects()))
+	for i, r := range req.GetRects() {
+		rects[i] = refresh.Rect{X: int(r.GetX()), Y: int(r.GetY()), W: int(r.GetW()), H: int(r.GetH())}
+	}
+	err := s.native.VideoRefreshRegions(refresh.Request{Rects: rects, QP: int(req.GetQp()), Frames: int(req.GetFrames())})
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return &pb.Empty{}, nil
 }

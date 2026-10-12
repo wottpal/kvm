@@ -342,6 +342,55 @@ It skips HTML comments and fenced code blocks.
   either way, full screen); the gain is order and device CPU while scrolling fast.
 - **Remove when:** upstream handles wheel reports over HID-RPC.
 
+### D13 — Client-driven region refresh
+
+- **Since:** 2026-10-13
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `jsonrpc.go`
+  - `internal/native/cgo/ctrl.c`
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/cgo/video.c`
+  - `internal/native/cgo_linux.go`
+  - `internal/native/cgo_notlinux.go`
+  - `internal/native/empty.go`
+  - `internal/native/encoder_params.go`
+  - `internal/native/grpc_clientmethods.go`
+  - `internal/native/grpc_servermethods.go`
+  - `internal/native/interface.go`
+  - `internal/native/proxy.go`
+  - `internal/native/video.go`
+  - `internal/native/proto/native.proto`
+  - `internal/native/proto/native.pb.go`
+  - `internal/native/proto/native_grpc.pb.go`
+  - `internal/native/refresh/`
+- **What:** the client decides when and where the picture is refreshed (it diffs decoded frames and knows its input
+  timing and the link); the device executes.
+  - `refreshRegions {"rects": [{"x", "y", "w", "h"}, ...], "qp": 1–51, "frames": 1–4}` returns `null`; `frames`
+    defaults to 2 (omitted or 0). With 1–6 rects, each becomes a forced-intra ROI (indexes 0–5; D07's whole-frame ROI
+    keeps 7) at absolute QP `qp`, aligned outward to 16 px and clipped to the frame, for the next `frames` encoded
+    frames (frames already in the encoder when the ROIs are set do not count), then turned off (retried every frame if
+    that fails). No keyframe; the encoder clamps `qp` to the P-frame floor, `minQp`. Without rects it is a full refresh
+    now: D07's refresh (whole-frame ROI at `qp`, keyframe by D04's paths, its size and QP-boost bookkeeping) without its
+    quiet and interval gating; the keyframe floor stays the lower of `stillQp` and `minQp`.
+  - The encoder output thread applies a request right after a frame came out, when the next one has usually not
+    reached the encoder. A request waits while a D07 refresh is in progress; a new one replaces the active one. Only
+    the current session may call it, only while the stream runs; invalid parameters, a rect outside the frame and a
+    stopped stream are JSON-RPC errors. Each request logs one always-on line:
+    `region refresh: 2 rects, 215296 px, qp 8, 2 frames` or `region refresh: full frame, qp 8`.
+  - `autoRefresh` (default `true`) joins D06's parameters: `false` keeps the device from starting D07 refreshes
+    itself, while its change tracking runs on. It resets with the other overrides when the stream stops or another
+    session takes over. The web UI never sets it, so it keeps D07's automatic refresh.
+  - `getFirmwareFeatures` (D12) lists `refreshRegions`. The JSON-RPC dispatcher decodes a parameter that is a slice
+    of structs from its JSON, as it did for a struct.
+- **Why:** big frames block everything behind them on this device: Go's SRTP and the UDP send cost about 0.47 ms of CPU
+  per 1200-byte packet, so a keystroke 10–60 ms after a keyframe is delayed by 23–61 ms (p90 +125 ms), and D07 sends a
+  near-lossless whole-frame keyframe after every typing pause (250–350 KB, 120–230 ms to send). A forced-intra ROI
+  refreshes only what changed: an 880×224 text rect went from 44.3 to 49.3 dB in one 41.5 KB P-frame, the rest
+  untouched. Without forced intra it reached 46.0 dB; QP 1 and QP 8 gave the same result at `minQp` 18. Verified on the device (2400×1012, busy desktop page, `minQp` 10): an 880×224 text rect went from 50.2 to 55.3 dB in one 54 KB P-frame, leaving the rest untouched; a full refresh was 355 KB (59.1 dB).
+- **Remove when:** upstream lets a client drive the encoder's refreshes.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

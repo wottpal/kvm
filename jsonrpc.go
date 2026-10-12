@@ -19,6 +19,7 @@ import (
 	"github.com/jetkvm/kvm/internal/hidrpc"
 	"github.com/jetkvm/kvm/internal/logging"
 	"github.com/jetkvm/kvm/internal/native"
+	"github.com/jetkvm/kvm/internal/native/refresh"
 	"github.com/jetkvm/kvm/internal/usbgadget"
 	"github.com/jetkvm/kvm/internal/utils"
 )
@@ -203,8 +204,10 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // rpcGetFirmwareFeatures names the fork's protocol additions, so clients
 // use them only where they exist (D12). "hidrpcWheel": wheel reports over
 // HID-RPC (0x04: vertical, horizontal), in order with pointer reports.
+// "refreshRegions": rpcRefreshRegions and the autoRefresh encoder parameter
+// (D13).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel"}
+	return []string{"hidrpcWheel", "refreshRegions"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
@@ -289,6 +292,24 @@ func rpcSetVideoEncoderParams(session *Session, params native.VideoEncoderParams
 	}
 	encoderParamsOwner = session
 	return nativeInstance.VideoGetEncoderParams()
+}
+
+// rpcRefreshRegions re-encodes rects as intra blocks at qp for the next
+// frames encoded frames (omitted or 0: refresh.DefaultFrames), or the whole
+// frame as a keyframe at qp when rects is empty. The client decides when (and
+// turns autoRefresh off); the device executes while the stream runs.
+func rpcRefreshRegions(session *Session, rects []refresh.Rect, qp int, frames int) error {
+	if session != nil && session != currentSession {
+		return errors.New("only the active session can refresh regions")
+	}
+	if frames == 0 {
+		frames = refresh.DefaultFrames
+	}
+	req := refresh.Request{Rects: rects, QP: qp, Frames: frames}
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return nativeInstance.VideoRefreshRegions(req)
 }
 
 // rpcRequestKeyframe asks for an IDR; a session being replaced gets none.
@@ -754,7 +775,7 @@ func riskyCallRPCHandler(logger zerolog.Logger, handler RPCHandler, params map[s
 
 		convertedValue := reflect.ValueOf(paramValue)
 		if !convertedValue.Type().ConvertibleTo(paramType) {
-			if paramType.Kind() == reflect.Slice && (convertedValue.Kind() == reflect.Slice || convertedValue.Kind() == reflect.Array) {
+			if paramType.Kind() == reflect.Slice && paramType.Elem().Kind() != reflect.Struct && (convertedValue.Kind() == reflect.Slice || convertedValue.Kind() == reflect.Array) {
 				newSlice := reflect.MakeSlice(paramType, convertedValue.Len(), convertedValue.Len())
 				for j := 0; j < convertedValue.Len(); j++ {
 					elemValue := convertedValue.Index(j)
@@ -779,7 +800,9 @@ func riskyCallRPCHandler(logger zerolog.Logger, handler RPCHandler, params map[s
 					}
 				}
 				args[i] = newSlice
-			} else if paramType.Kind() == reflect.Struct && convertedValue.Kind() == reflect.Map {
+			} else if paramType.Kind() == reflect.Struct && convertedValue.Kind() == reflect.Map ||
+				paramType.Kind() == reflect.Slice && paramType.Elem().Kind() == reflect.Struct && convertedValue.Kind() == reflect.Slice {
+				// A struct, or a slice of structs, decodes from its JSON.
 				jsonData, err := json.Marshal(convertedValue.Interface())
 				if err != nil {
 					return nil, fmt.Errorf("failed to marshal map to JSON: %v for parameter %s", err, paramName)
@@ -1534,6 +1557,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getFirmwareFeatures":        {Func: rpcGetFirmwareFeatures},
 	"setVideoEncoderParams":      {Func: rpcSetVideoEncoderParams, Params: []string{"params"}},
 	"requestKeyframe":            {Func: rpcRequestKeyframe},
+	"refreshRegions":             {Func: rpcRefreshRegions, Params: []string{"rects", "qp"}, OptionalParams: []string{"frames"}},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},
 	"setVideoCodecPreference":    {Func: rpcSetVideoCodecPreference, Params: []string{"codec"}},

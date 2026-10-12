@@ -2,6 +2,8 @@
 
 package native
 
+import "github.com/jetkvm/kvm/internal/native/refresh"
+
 func panicPlatformNotSupported() {
 	panic("platform not supported")
 }
@@ -150,6 +152,11 @@ func videoSetEncoderParams(params VideoEncoderParams) error {
 
 func videoResetEncoderParams() {
 	panicPlatformNotSupported()
+}
+
+func videoRefreshRegions(req refresh.Request) error {
+	panicPlatformNotSupported()
+	return nil
 }
 
 func videoGetStreamingStatus() VideoStreamingStatus {

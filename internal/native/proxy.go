@@ -18,6 +18,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/jetkvm/kvm/internal/diagnostics"
+	"github.com/jetkvm/kvm/internal/native/refresh"
 	"github.com/jetkvm/kvm/internal/supervisor"
 	"github.com/jetkvm/kvm/internal/utils"
 	"github.com/rs/zerolog"
@@ -626,6 +627,12 @@ func (p *NativeProxy) VideoGetEncoderParams() (encoderStatus VideoEncoderStatus,
 func (p *NativeProxy) VideoSetEncoderParams(params VideoEncoderParams) error {
 	return nativeProxyClientExecWithoutArgument(p, func(client *GRPCClient) error {
 		return client.VideoSetEncoderParams(params)
+	})
+}
+
+func (p *NativeProxy) VideoRefreshRegions(req refresh.Request) error {
+	return nativeProxyClientExecWithoutArgument(p, func(client *GRPCClient) error {
+		return client.VideoRefreshRegions(req)
 	})
 }
 

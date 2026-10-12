@@ -387,6 +387,10 @@ int jetkvm_video_set_encoder_params(const jetkvm_venc_params_t *params) {
     return video_set_encoder_params(params);
 }
 
+int jetkvm_video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, int frames) {
+    return video_refresh_regions(rects, count, qp, frames);
+}
+
 void jetkvm_video_get_encoder_status(jetkvm_venc_status_t *status) {
     video_get_encoder_status(status);
 }

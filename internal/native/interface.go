@@ -1,5 +1,7 @@
 package native
 
+import "github.com/jetkvm/kvm/internal/native/refresh"
+
 // NativeInterface defines the interface that both Native and NativeProxy implement
 type NativeInterface interface {
 	Start() error
@@ -18,6 +20,7 @@ type NativeInterface interface {
 	VideoRequestKeyframe() error
 	VideoGetEncoderParams() (VideoEncoderStatus, error)
 	VideoSetEncoderParams(params VideoEncoderParams) error
+	VideoRefreshRegions(req refresh.Request) error
 	GetLVGLVersion() (string, error)
 	UIObjHide(objName string) (bool, error)
 	UIObjShow(objName string) (bool, error)

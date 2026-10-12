@@ -1,5 +1,7 @@
 package native
 
+import "github.com/jetkvm/kvm/internal/native/refresh"
+
 type EmptyNativeInterface struct {
 }
 
@@ -58,6 +60,10 @@ func (e *EmptyNativeInterface) VideoGetEncoderParams() (VideoEncoderStatus, erro
 }
 
 func (e *EmptyNativeInterface) VideoSetEncoderParams(params VideoEncoderParams) error {
+	return nil
+}
+
+func (e *EmptyNativeInterface) VideoRefreshRegions(req refresh.Request) error {
 	return nil
 }
 

@@ -25,6 +25,7 @@ service NativeService {
   rpc VideoRequestKeyframe(Empty) returns (Empty);
   rpc VideoGetEncoderParams(Empty) returns (VideoEncoderStatus);
   rpc VideoSetEncoderParams(VideoEncoderParams) returns (Empty);
+  rpc VideoRefreshRegions(VideoRefreshRegionsRequest) returns (Empty);
 
   // UI methods
   rpc GetLVGLVersion(Empty) returns (GetLVGLVersionResponse);
@@ -278,6 +279,7 @@ message VideoEncoderParams {
   int32 bitrate_kbps = 6;
   int32 max_bitrate_kbps = 7;
   int32 still_qp = 8;
+  bool auto_refresh = 9;
 }
 
 message VideoEncoderStatus {
@@ -289,4 +291,17 @@ message VideoEncoderStatus {
   int32 effective_max_bitrate_kbps = 6;
   string codec = 7;
   bool streaming = 8;
+}
+
+message VideoRect {
+  int32 x = 1;
+  int32 y = 2;
+  int32 w = 3;
+  int32 h = 4;
+}
+
+message VideoRefreshRegionsRequest {
+  repeated VideoRect rects = 1;
+  int32 qp = 2;
+  int32 frames = 3;
 }

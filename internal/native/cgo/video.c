@@ -184,6 +184,15 @@ static void enc_note_output(RK_U64 t, bool idr)
     pthread_mutex_unlock(&enc_mutex);
 }
 
+// Frames handed to the encoder whose bitstream has not come out yet.
+static unsigned enc_in_flight(void)
+{
+    pthread_mutex_lock(&enc_mutex);
+    const unsigned n = (unsigned)((enc_sub_head - enc_sub_tail + 8) % 8);
+    pthread_mutex_unlock(&enc_mutex);
+    return n;
+}
+
 // JETKVM_EARLY_SUBMIT_US: unset = automatic, 0 = off, N = a fixed offset.
 static long early_fixed_us(void)
 {
@@ -365,6 +374,7 @@ static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
         .bitrate_kbps = 0,            \
         .max_bitrate_kbps = 0,        \
         .still_qp = 8,                \
+        .auto_refresh = true,         \
     }
 static jetkvm_venc_params_t venc_params = VENC_PARAMS_COMPILED_DEFAULTS;
 // Compiled defaults with env overrides applied (venc_params_load_env).
@@ -773,33 +783,126 @@ static void still_reset(void)
     still.floor_prev = SIZE_MAX;
 }
 
+// Client-driven refresh (D13). video_refresh_regions queues a request; the
+// encoder output thread applies it right after a frame came out, before the
+// next one has usually reached the encoder: up to REGION_MAX forced-intra
+// ROIs at an absolute QP (the encoder clamps it to the P-frame floor, min_qp)
+// for the next `frames` encoded frames, not counting frames that were already
+// in the encoder, or without rects a full refresh (the still refresh without
+// its gating). A request waits while a still refresh is in progress, and
+// replaces the active one. Guarded by venc_state_mutex; reset with the
+// channel, which drops its ROIs.
+#define REGION_MAX 6 // ROI indexes 0-5 (STILL_ROI_INDEX is the still refresh's)
+#define REGION_MAX_FRAMES 4
+
+static struct
+{
+    bool pending;   // a request waits for the next frame
+    unsigned count; // its rects; 0 = a full refresh
+    RECT_S rects[REGION_MAX];
+    int qp;
+    unsigned frames;
+    unsigned on;   // ROIs set, a bit per index (also if turning one off failed)
+    unsigned want; // ROIs of the active request
+    unsigned skip; // frames that were in the encoder when it was applied
+    unsigned left; // frames still to come out with its ROIs
+} region;
+
+static RECT_S venc_frame_rect(void)
+{
+    return (RECT_S){.s32X = 0, .s32Y = 0, .u32Width = venc_live.width, .u32Height = venc_live.height};
+}
+
 // Caller holds venc_state_mutex with venc_running set.
-static bool still_set_roi_locked(bool enable, int qp)
+static bool venc_set_roi_locked(unsigned index, bool enable, int qp, bool intra, RECT_S rect)
 {
     VENC_ROI_ATTR_S roi;
     memset(&roi, 0, sizeof(roi));
-    roi.u32Index = STILL_ROI_INDEX;
+    roi.u32Index = index;
     roi.bEnable = enable ? RK_TRUE : RK_FALSE;
     roi.bAbsQp = RK_TRUE;
     roi.s32Qp = qp;
-    roi.bIntra = RK_FALSE;
-    roi.stRect.s32X = 0;
-    roi.stRect.s32Y = 0;
-    roi.stRect.u32Width = venc_live.width;
-    roi.stRect.u32Height = venc_live.height;
+    roi.bIntra = intra ? RK_TRUE : RK_FALSE;
+    roi.stRect = rect;
     const int32_t ret = RK_MPI_VENC_SetRoiAttr(VENC_CHANNEL, &roi);
     if (ret != RK_SUCCESS)
     {
-        log_error("still refresh ROI %s failed: %#x", enable ? "on" : "off", ret);
+        log_error("VENC ROI %u %s failed: %#x", index, enable ? "on" : "off", ret);
         return false;
     }
     return true;
+}
+
+// Caller holds venc_state_mutex with venc_running set.
+static bool still_set_roi_locked(bool enable, int qp)
+{
+    return venc_set_roi_locked(STILL_ROI_INDEX, enable, qp, false, venc_frame_rect());
+}
+
+// Encoder output thread, after a frame came out; caller holds
+// venc_state_mutex with venc_running set. Counts the frame against the active
+// request, applies a pending one unless a still refresh is in progress, and
+// turns off the ROIs no longer wanted (retried every frame if that fails).
+// Returns the QP of a full refresh to start, 0 for none.
+static int region_on_frame_locked(bool still_idle)
+{
+    if (region.left > 0)
+    {
+        if (region.skip > 0)
+            region.skip--;
+        else if (--region.left == 0)
+            region.want = 0;
+    }
+    int full_qp = 0;
+    if (region.pending && still_idle)
+    {
+        region.pending = false;
+        region.want = 0;
+        for (unsigned i = 0; i < region.count; i++)
+        {
+            if (venc_set_roi_locked(i, true, region.qp, true, region.rects[i]))
+                region.want |= 1u << i;
+        }
+        region.on |= region.want;
+        region.skip = enc_in_flight();
+        region.left = region.want != 0 ? region.frames : 0;
+        if (region.count == 0)
+            full_qp = region.qp;
+    }
+    const unsigned stale = region.on & ~region.want;
+    for (unsigned i = 0; i < REGION_MAX; i++)
+    {
+        if ((stale & (1u << i)) && venc_set_roi_locked(i, false, 0, false, venc_frame_rect()))
+            region.on &= ~(1u << i);
+    }
+    return full_qp;
 }
 
 // Takes venc_state_mutex itself (defined with the keyframe paths). Returns
 // the keyframe path used.
 static int still_request_keyframe(void);
 static void still_keyframe_path_failed(int path);
+
+// Starts a still refresh: the whole-frame ROI at qp and a keyframe request.
+// Returns false if the ROI could not be set; the next automatic refresh then
+// waits for the refresh interval too, not just a frame.
+static bool still_start(int qp)
+{
+    still.last_refresh_us = get_us();
+    pthread_mutex_lock(&venc_state_mutex);
+    const bool started = venc_running && still_set_roi_locked(true, qp);
+    if (started)
+        still.roi_on = true;
+    pthread_mutex_unlock(&venc_state_mutex);
+    if (!started)
+        return false;
+    still.kf_path = still_request_keyframe();
+    still.refreshing = 1;
+    still.dirty = false;
+    still.window = 0;
+    still.recent = 0;
+    return true;
+}
 
 // Called for every encoded frame with its size, after the frame went out.
 static void still_on_frame(size_t len, bool idr)
@@ -810,6 +913,7 @@ static void still_on_frame(size_t len, bool idr)
     const size_t per_second = (size_t)venc_live.bitrate * 1000 / 8;
     const size_t budget = per_second / fps;
     const int still_qp = venc_live.params.still_qp, min_qp = venc_live.params.min_qp;
+    const bool auto_refresh = venc_live.params.auto_refresh;
     const bool ending = still.refreshing > 0 && (idr || still.refreshing + 1 > STILL_REFRESH_MAX_FRAMES);
     // Turn the ROI off once the refresh is out; retried every frame if the
     // call fails (a lingering whole-frame absolute QP would pin every frame).
@@ -817,8 +921,14 @@ static void still_on_frame(size_t len, bool idr)
     {
         still.roi_on = false;
     }
+    const int full_qp = running ? region_on_frame_locked(still.refreshing == 0) : 0;
     pthread_mutex_unlock(&venc_state_mutex);
 
+    if (full_qp > 0)
+    {
+        still_start(full_qp);
+        return;
+    }
     if (still.refreshing > 0)
     {
         still.refreshing++;
@@ -891,38 +1001,23 @@ static void still_on_frame(size_t len, bool idr)
         still.dirty = true;
         still.backoff = 0;
     }
-    if (!still.dirty || ++still.quiet < fps / 2 || still.recent >= STILL_SETTLED_BYTES || still_qp >= min_qp || !running)
+    // Without auto_refresh the tracking above goes on; only the start waits
+    // for a client (video_refresh_regions).
+    if (!still.dirty || ++still.quiet < fps / 2 || still.recent >= STILL_SETTLED_BYTES || still_qp >= min_qp ||
+        !auto_refresh || !running)
     {
         return;
     }
-    const uint64_t now = get_us();
-    if (now - still.last_refresh_us < ((uint64_t)STILL_MIN_INTERVAL_US << still.backoff))
+    if (get_us() - still.last_refresh_us < ((uint64_t)STILL_MIN_INTERVAL_US << still.backoff))
     {
         return;
     }
-    // Also on failure: a ROI that cannot be set is retried at the refresh
-    // interval, not on every frame.
-    still.last_refresh_us = now;
     const int qp = still_qp + still.boost < min_qp ? still_qp + still.boost : min_qp;
-    pthread_mutex_lock(&venc_state_mutex);
-    const bool started = venc_running && still_set_roi_locked(true, qp);
-    if (started)
-        still.roi_on = true;
-    pthread_mutex_unlock(&venc_state_mutex);
-    if (!started)
+    if (!still_start(qp) && !still.roi_warned)
     {
-        if (!still.roi_warned)
-        {
-            still.roi_warned = true;
-            log_notice("still refresh: the ROI could not be set; retrying at the refresh interval (logged once)");
-        }
-        return;
+        still.roi_warned = true;
+        log_notice("still refresh: the ROI could not be set; retrying at the refresh interval (logged once)");
     }
-    still.kf_path = still_request_keyframe();
-    still.refreshing = 1;
-    still.dirty = false;
-    still.window = 0;
-    still.recent = 0;
 }
 
 static void venc_set_running(bool running)
@@ -950,6 +1045,7 @@ static int32_t venc_start(RK_U32 width, RK_U32 height, RK_U32 source_fps)
     venc_live.gop_nudge = 0;
     venc_bitrates(&params, width, height, &venc_live.bitrate, &venc_live.max_bitrate);
     still_reset();
+    memset(&region, 0, sizeof(region));
 
     populate_venc_attr(&stAttr, venc_live.bitrate, venc_live.max_bitrate, width, height,
                        venc_live.encode_fps, venc_live.gop);
@@ -2162,7 +2258,8 @@ void video_reset_encoder_params(void)
     const bool changed = p->min_qp != d->min_qp || p->max_qp != d->max_qp ||
                          p->gop_seconds != d->gop_seconds || p->aq != d->aq ||
                          p->max_fps != d->max_fps || p->bitrate_kbps != d->bitrate_kbps ||
-                         p->max_bitrate_kbps != d->max_bitrate_kbps || p->still_qp != d->still_qp;
+                         p->max_bitrate_kbps != d->max_bitrate_kbps || p->still_qp != d->still_qp ||
+                         p->auto_refresh != d->auto_refresh;
     venc_params = venc_params_defaults;
     pthread_mutex_unlock(&venc_params_mutex);
     if (changed)
@@ -2198,8 +2295,8 @@ int video_set_encoder_params(const jetkvm_venc_params_t *params)
     pthread_mutex_lock(&venc_params_mutex);
     venc_params = *params;
     pthread_mutex_unlock(&venc_params_mutex);
-    log_notice("encoder params set: qp %d-%d (still %d), gop %.1f s, aq %s, max fps %d, bitrate %d/%d kbps (0 = auto)",
-               params->min_qp, params->max_qp, params->still_qp, params->gop_seconds,
+    log_notice("encoder params set: qp %d-%d (still %d, auto refresh %s), gop %.1f s, aq %s, max fps %d, bitrate %d/%d kbps (0 = auto)",
+               params->min_qp, params->max_qp, params->still_qp, params->auto_refresh ? "on" : "off", params->gop_seconds,
                params->aq ? "rockchip default" : "off", params->max_fps,
                params->bitrate_kbps, params->max_bitrate_kbps);
     // No running channel: the next venc_start() picks the values up.
@@ -2214,6 +2311,59 @@ int video_set_encoder_params(const jetkvm_venc_params_t *params)
         video_restart_streaming();
     }
     return 0;
+}
+
+// A client rect aligned outward to the encoder's 16-pixel blocks (a ROI
+// covers whole blocks; this one covers every block the rect touches) and
+// clipped to the frame. False if it does not start inside the frame.
+static bool region_rect(const jetkvm_rect_t *r, RK_U32 width, RK_U32 height, RECT_S *out)
+{
+    if (r->x < 0 || r->y < 0 || r->w < 1 || r->h < 1 || (RK_U32)r->x >= width || (RK_U32)r->y >= height)
+    {
+        return false;
+    }
+    const RK_U32 x = (RK_U32)r->x & ~15u, y = (RK_U32)r->y & ~15u;
+    const uint64_t right = RK_ALIGN_16((uint64_t)r->x + (uint64_t)r->w);
+    const uint64_t bottom = RK_ALIGN_16((uint64_t)r->y + (uint64_t)r->h);
+    out->s32X = (RK_S32)x;
+    out->s32Y = (RK_S32)y;
+    out->u32Width = (right < width ? (RK_U32)right : width) - x;
+    out->u32Height = (bottom < height ? (RK_U32)bottom : height) - y;
+    return true;
+}
+
+// Queues a client-driven refresh for the encoder output thread (see region).
+int video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, int frames)
+{
+    if (count < 0 || count > REGION_MAX || qp < 1 || qp > 51 || frames < 1 || frames > REGION_MAX_FRAMES)
+    {
+        return JETKVM_REFRESH_INVALID;
+    }
+    RECT_S clipped[REGION_MAX];
+    uint64_t area = 0;
+    pthread_mutex_lock(&venc_state_mutex);
+    int ret = venc_running ? 0 : JETKVM_REFRESH_NOT_STREAMING;
+    for (int i = 0; ret == 0 && i < count; i++)
+    {
+        if (region_rect(&rects[i], venc_live.width, venc_live.height, &clipped[i]))
+            area += (uint64_t)clipped[i].u32Width * clipped[i].u32Height;
+        else
+            ret = JETKVM_REFRESH_OUTSIDE;
+    }
+    if (ret == 0)
+    {
+        memcpy(region.rects, clipped, (size_t)count * sizeof(clipped[0]));
+        region.count = (unsigned)count;
+        region.qp = qp;
+        region.frames = (unsigned)frames;
+        region.pending = true;
+    }
+    pthread_mutex_unlock(&venc_state_mutex);
+    if (ret == 0 && count == 0)
+        log_notice("region refresh: full frame, qp %d", qp);
+    else if (ret == 0)
+        log_notice("region refresh: %d rects, %llu px, qp %d, %d frames", count, (unsigned long long)area, qp, frames);
+    return ret;
 }
 
 void video_get_encoder_status(jetkvm_venc_status_t *status)

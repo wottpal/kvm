@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jetkvm/kvm/internal/native/refresh"
 )
 
 const sleepModeFile = "/sys/devices/platform/ff470000.i2c/i2c-4/4-000f/sleep_mode"
@@ -268,6 +270,16 @@ func (n *Native) VideoSetEncoderParams(params VideoEncoderParams) error {
 	defer n.videoLock.Unlock()
 
 	return videoSetEncoderParams(params)
+}
+
+// VideoRefreshRegions queues a client-driven refresh (refresh.Request) for
+// the running encoder. Like VideoRequestKeyframe it skips videoLock; the C
+// side orders it against encoder teardown.
+func (n *Native) VideoRefreshRegions(req refresh.Request) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return videoRefreshRegions(req)
 }
 
 // VideoGetStreamingStatus gets the streaming status of the video.
