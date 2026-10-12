@@ -1,6 +1,5 @@
 > **Fork notice:** this repository is a fork of [jetkvm/kvm](https://github.com/jetkvm/kvm), tuned for
-> desktop content and the [JetKVM Desktop](https://github.com/wottpal/jetkvm-desktop) app. Every difference
-> from upstream is documented in [FORK.md](FORK.md).
+> desktop content and the BlitzKVM app. Every difference from upstream is documented in [FORK.md](FORK.md).
 
 <div align="center">
     <img alt="JetKVM logo" src="https://jetkvm.com/logo-blue.png" height="28">

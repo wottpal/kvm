@@ -1,10 +1,9 @@
 # Fork divergences
 
 This repository is a fork of [jetkvm/kvm](https://github.com/jetkvm/kvm) (GPL-2.0), the JetKVM device firmware. It
-tunes the video encoder for desktop content and adds the encoder control that the
-[JetKVM Desktop](https://github.com/wottpal/jetkvm-desktop) app uses. This file lists every **divergence**: each change
-that makes this fork differ from upstream `dev`. A pull request that adds, changes or removes a divergence updates this
-file in the same pull request.
+tunes the video encoder for desktop content and adds the encoder control that the BlitzKVM app uses. This file lists
+every **divergence**: each change that makes this fork differ from upstream `dev`. A pull request that adds, changes
+or removes a divergence updates this file in the same pull request.
 
 ## Base
 
@@ -203,7 +202,7 @@ It skips HTML comments and fenced code blocks.
     started; the next client never inherits the previous one's settings. Partial updates are serialised.
   - Status object: the parameters, plus `sourceFps`, `encodeFps`, `gopFrames`, `effectiveBitrateKbps`,
     `effectiveMaxBitrateKbps`, `codec` and `streaming`.
-- **Why:** the JetKVM Desktop app adapts quality to the network (frame rate, bitrate, QP floor) without re-plugging
+- **Why:** the BlitzKVM app adapts quality to the network (frame rate, bitrate, QP floor) without re-plugging
   HDMI or restarting the stream.
 - **Remove when:** upstream offers equivalent runtime control.
 
@@ -246,7 +245,7 @@ It skips HTML comments and fenced code blocks.
   - **Loss repair:** the NACK responder keeps 4096 packets instead of pion's 1024 (about 1.2 MB, shorter than a
     refresh keyframe), so a loss early in a large keyframe can still be repaired.
 - **Why:** P-frames never refine a still picture: the encoder skips blocks whose residual is small, at any QP. Measured
-  on the JetKVM Desktop app's maximum level: light text 53.2 → 60.5 dB, colored text 28.1 → 51.5 dB (with the app's
+  on the BlitzKVM app's maximum level: light text 53.2 → 60.5 dB, colored text 28.1 → 51.5 dB (with the app's
   color reconstruction), a still screen 0.54 → 0.08 Mbit/s.
 - **Trade-off:** other keyframes may go below `minQp` too. On a still desktop, keyframes from a PLI measured 103 KB
   instead of 87 KB (default parameters) and 165 KB instead of 136 KB (minimum QP 10).
@@ -299,7 +298,7 @@ It skips HTML comments and fenced code blocks.
   as `captureMaxBytes`. A mode that does not fit logs its size against the buffers' instead of a bare failure.
 - **Why:** the TC358749's driver runs the CSI link at 109.7 Mpx/s for modes of 33 Hz or less (745 Mbit/s a lane above,
   438.75 at or below). A pixel clock just under that rate drains each line about as fast as it arrives, so any width up to
-  the bridge's 4000-pixel lines streams, where the fast link stops near 2500 pixels. The JetKVM Desktop app uses this to
+  the bridge's 4000-pixel lines streams, where the fast link stops near 2500 pixels. The BlitzKVM app uses this to
   give a large window its full resolution: 3008×1268 at 25 Hz for a 40" 21:9 display (measured clean, 0 decode errors).
   Upstream's buffers capped those modes at 3.1 megapixels. Video CMA: 42.6 of 48 MiB in use at 3008×1268 (the buffers
   are preallocated, 24.6 MiB idle).
@@ -391,4 +390,4 @@ copy files with `ssh ... "cat > file" < file`.
   and `.sig`). The fork persists nothing of its own (encoder overrides live in memory, no configuration keys are
   added), so the stock app starts from the same configuration.
 - **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
-  "method not found" from stock firmware; the JetKVM Desktop app then falls back to the stream quality factor.
+  "method not found" from stock firmware; the BlitzKVM app then falls back to the stream quality factor.
