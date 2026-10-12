@@ -304,6 +304,27 @@ It skips HTML comments and fenced code blocks.
   are preallocated, 24.6 MiB idle).
 - **Remove when:** upstream sizes the capture buffers for modes above 1080p.
 
+### D11 — Early submit: encoding overlaps the capture
+
+- **Since:** 2026-10-13
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `internal/native/cgo/video.c`
+- **What:** after dequeuing frame k, the capture loop hands the encoder the buffer VICAP is writing frame k+1 into (the
+  next one in its ping-pong order), timed so the encoder, which is faster than the HDMI scan-out, trails the capture's
+  writes: at frame k+1's start plus the active picture time (height × line time) minus the fastest recent encode
+  (I-frames encode ~2 ms faster than P-frames), plus 2 ms. The frame then leaves the encoder about when its capture ends,
+  instead of one encode time later. A dequeued buffer that is not the predicted one goes the normal way, logged.
+  `JETKVM_EARLY_SUBMIT_US` overrides the offset (0 turns it off). `JETKVM_TIMING=1` logs capture, frame start → bitstream,
+  handoff, sizes and the encode times and offset every 2 s. The frame's PTS is now its start time.
+- **Why:** on the RV1106 the encoder takes about as long as a frame (15.2 ms at 2400×1012), and it only started once the
+  frame was complete. Measured on a Mac host: frame start → bitstream 31.9 → 19.9 ms at 2400×1012@60 and 10.6 ms at
+  1280×720@120; key press → screen 89 → 76 ms, pointer 67 → 50 ms (full screen, 40 samples each). A tear probe (frame
+  counters at the top, middle and bottom of a page that changes every frame) found no torn frame in ~2000 frames with a
+  keyframe every 0.5 s; tearing starts ~1.3 ms below the automatic offset (P-frames ~2 ms below).
+- **Remove when:** never (the hardware path, an ISP/DVBM wrap, needs device-tree changes outside this fork).
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

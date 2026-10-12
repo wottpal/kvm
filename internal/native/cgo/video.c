@@ -56,6 +56,204 @@ RK_U64 get_us()
     return (RK_U64)time.tv_sec * 1000000 + (RK_U64)time.tv_nsec / 1000; /* microseconds */
 }
 
+// ---- per-frame timing (JETKVM_TIMING=1, D11): logged every 2 s ----
+static uint32_t early_eI, early_eP, early_off;
+uint32_t detected_line_ns = 0;
+#define TM_N 512
+typedef struct { uint32_t v[TM_N]; int n; } tm_series_t;
+static int tm_enabled = -1;
+static pthread_mutex_t tm_mutex = PTHREAD_MUTEX_INITIALIZER;
+static tm_series_t tm_cap, tm_send, tm_enc, tm_hand, tm_size;
+static RK_U64 tm_last_report;
+
+static bool tm_on(void)
+{
+    if (tm_enabled < 0)
+    {
+        const char *s = getenv("JETKVM_TIMING");
+        tm_enabled = s != NULL && s[0] == '1';
+    }
+    return tm_enabled == 1;
+}
+
+static void tm_add(tm_series_t *t, uint32_t v)
+{
+    if (t->n < TM_N)
+        t->v[t->n++] = v;
+}
+
+static int tm_cmp(const void *a, const void *b)
+{
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+static void tm_stat(tm_series_t *t, uint32_t *p50, uint32_t *p90, uint32_t *mx)
+{
+    *p50 = *p90 = *mx = 0;
+    if (t->n == 0)
+        return;
+    qsort(t->v, t->n, sizeof(uint32_t), tm_cmp);
+    *p50 = t->v[t->n / 2];
+    *p90 = t->v[(t->n * 9) / 10];
+    *mx = t->v[t->n - 1];
+}
+
+static void tm_maybe_report(void)
+{
+    RK_U64 now = get_us();
+    if (tm_last_report == 0)
+        tm_last_report = now;
+    if (now - tm_last_report < 2000000)
+        return;
+    tm_last_report = now;
+    uint32_t c50, c90, cmx, s50, s90, smx, e50, e90, emx, h50, h90, hmx, z50, z90, zmx;
+    int n = tm_enc.n;
+    tm_stat(&tm_cap, &c50, &c90, &cmx);
+    tm_stat(&tm_send, &s50, &s90, &smx);
+    tm_stat(&tm_enc, &e50, &e90, &emx);
+    tm_stat(&tm_hand, &h50, &h90, &hmx);
+    tm_stat(&tm_size, &z50, &z90, &zmx);
+    log_notice("TIMING n=%d cap_us %u/%u/%u send_us %u/%u/%u f2o_us %u/%u/%u hand_us %u/%u/%u size %u/%u/%u eI %u eP %u off %u line_ns %u",
+               n, c50, c90, cmx, s50, s90, smx, e50, e90, emx, h50, h90, hmx, z50, z90, zmx, early_eI, early_eP, early_off, detected_line_ns);
+    tm_cap.n = tm_send.n = tm_enc.n = tm_hand.n = tm_size.n = 0;
+}
+// ---- end per-frame timing ----
+
+// ---- early submit (D11) ----
+// After DQBUF of frame k (buffer i), VICAP is writing frame k+1 into buffer
+// (i+1) % n. That buffer goes to the encoder at frame k+1's start plus an
+// offset, so the encoder (faster than the scan-out) trails the capture's
+// writes and finishes about when the capture does, instead of one encode
+// time later: frame start to bitstream 19.9 instead of 31.9 ms at 2400x1012,
+// 60 Hz. The offset follows the mode and the measured encode times.
+// Encode times by frame type: the minimum of the last 64 of each.
+#define ENC_WIN 64
+typedef struct { uint32_t v[ENC_WIN]; int n, i; } enc_win_t;
+static enc_win_t enc_i, enc_p;
+static RK_U64 enc_submits[8];
+static int enc_sub_head, enc_sub_tail;
+static pthread_mutex_t enc_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void enc_win_add(enc_win_t *w, uint32_t v)
+{
+    w->v[w->i] = v;
+    w->i = (w->i + 1) % ENC_WIN;
+    if (w->n < ENC_WIN)
+        w->n++;
+}
+
+static uint32_t enc_win_min(const enc_win_t *w)
+{
+    uint32_t m = UINT32_MAX;
+    for (int i = 0; i < w->n; i++)
+        if (w->v[i] < m)
+            m = w->v[i];
+    return m;
+}
+
+static void enc_reset(void)
+{
+    pthread_mutex_lock(&enc_mutex);
+    memset(&enc_i, 0, sizeof(enc_i));
+    memset(&enc_p, 0, sizeof(enc_p));
+    enc_sub_head = enc_sub_tail = 0;
+    pthread_mutex_unlock(&enc_mutex);
+}
+
+static void enc_note_submit(RK_U64 t)
+{
+    pthread_mutex_lock(&enc_mutex);
+    enc_submits[enc_sub_head] = t;
+    enc_sub_head = (enc_sub_head + 1) % 8;
+    if (enc_sub_head == enc_sub_tail)
+        enc_sub_tail = (enc_sub_tail + 1) % 8;
+    pthread_mutex_unlock(&enc_mutex);
+}
+
+static void enc_note_output(RK_U64 t, bool idr)
+{
+    pthread_mutex_lock(&enc_mutex);
+    if (enc_sub_tail != enc_sub_head)
+    {
+        RK_U64 sub = enc_submits[enc_sub_tail];
+        enc_sub_tail = (enc_sub_tail + 1) % 8;
+        if (t > sub)
+            enc_win_add(idr ? &enc_i : &enc_p, (uint32_t)(t - sub));
+    }
+    pthread_mutex_unlock(&enc_mutex);
+}
+
+// JETKVM_EARLY_SUBMIT_US: unset = automatic, 0 = off, N = a fixed offset.
+static long early_fixed_us(void)
+{
+    static long value = -2; // -2: not read yet, -1: automatic
+    if (value == -2)
+    {
+        const char *e = getenv("JETKVM_EARLY_SUBMIT_US");
+        value = e != NULL && *e != '\0' ? strtol(e, NULL, 10) : -1;
+    }
+    return value;
+}
+
+// The early-submit offset after a frame's start, 0 for none: the encoder
+// must not reach a row before the capture has written it.
+static uint32_t early_offset_us(uint32_t height, RK_U64 period_us)
+{
+    long fixed = early_fixed_us();
+    if (fixed >= 0)
+        return (uint32_t)fixed;
+    pthread_mutex_lock(&enc_mutex);
+    uint32_t e_p = enc_p.n >= 8 ? enc_win_min(&enc_p) : 0;
+    uint32_t e_i = enc_i.n >= 1 ? enc_win_min(&enc_i) : 0;
+    pthread_mutex_unlock(&enc_mutex);
+    early_eI = e_i;
+    early_eP = e_p;
+    if (detected_line_ns == 0 || e_p == 0)
+        return early_off = 0;
+    // I-frames encode faster (no motion search); until one has been seen,
+    // assume 2.5 ms faster than the fastest P-frame.
+    uint32_t e = e_i != 0 && e_i < e_p ? e_i : (e_i == 0 ? (e_p > 2500 ? e_p - 2500 : 0) : e_p);
+    RK_U64 active = (RK_U64)height * detected_line_ns / 1000;
+    RK_U64 off = active > e ? active - e : 0;
+    off += 2000; // margin: encoder prefetch (~0.7 ms measured) plus 1.3 ms
+    if (off + 1000 > period_us)
+        return early_off = 0; // no time left to gain
+    return early_off = (uint32_t)off;
+}
+
+static void sleep_until_us(RK_U64 t)
+{
+    struct timespec ts = {.tv_sec = (time_t)(t / 1000000), .tv_nsec = (long)(t % 1000000) * 1000};
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR)
+    {
+    }
+}
+
+static void venc_submit(VIDEO_FRAME_INFO_S *frame, MB_BLK blk, uint32_t num, RK_U64 start_us)
+{
+    frame->stVFrame.pMbBlk = blk;
+    frame->stVFrame.u32TimeRef = num;
+    frame->stVFrame.u64PTS = start_us;
+    RK_U64 t0 = get_us();
+    enc_note_submit(t0);
+    if (RK_MPI_VENC_SendFrame(VENC_CHANNEL, frame, 2000) != RK_SUCCESS)
+    {
+        log_error("RK_MPI_VENC_SendFrame failed, retrying");
+        usleep(1000llu);
+        if (RK_MPI_VENC_SendFrame(VENC_CHANNEL, frame, 2000) != RK_SUCCESS)
+            log_error("RK_MPI_VENC_SendFrame retry failed");
+    }
+    if (tm_on())
+    {
+        RK_U64 t1 = get_us();
+        pthread_mutex_lock(&tm_mutex);
+        tm_add(&tm_send, (uint32_t)(t1 - t0));
+        pthread_mutex_unlock(&tm_mutex);
+    }
+}
+// ---- end early submit ----
+
 static void ensure_sleep_mode_disabled()
 {
     if (!sleep_mode_available)
@@ -1320,7 +1518,18 @@ static void *venc_read_stream(void *arg)
             pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
             const size_t len = stFrame.pstPack->u32Len;
             const bool idr = venc_count_output(pData, len);
+            enc_note_output(nowUs, idr);
             video_send_frame(pData, (ssize_t)len);
+            if (tm_on())
+            {
+                RK_U64 handed = get_us();
+                pthread_mutex_lock(&tm_mutex);
+                tm_add(&tm_enc, (uint32_t)(nowUs - stFrame.pstPack->u64PTS));
+                tm_add(&tm_hand, (uint32_t)(handed - nowUs));
+                tm_add(&tm_size, (uint32_t)len);
+                tm_maybe_report();
+                pthread_mutex_unlock(&tm_mutex);
+            }
             s32Ret = RK_MPI_VENC_ReleaseStream(VENC_CHANNEL, &stFrame);
             if (s32Ret != RK_SUCCESS)
             {
@@ -1552,6 +1761,9 @@ void *run_video_stream(void *arg)
         int r;
         uint32_t num = 0;
         uint32_t frame_credit = 0;
+        RK_U64 last_ts_us = 0, period_us = 0;
+        int early_index = -1;
+        enc_reset();
         VIDEO_FRAME_INFO_S stFrame;
         memset(&stFrame, 0, sizeof(VIDEO_FRAME_INFO_S));
         stFrame.stVFrame.u32Width = width;
@@ -1599,44 +1811,60 @@ void *run_video_stream(void *arg)
                 break;
             }
             log_trace("got frame, bytesused = %d", tmp_plane.bytesused);
-            // Drop frames evenly to encode encode_fps of fps. Done here rather
-            // than via the VENC dst frame rate, whose drop behaviour rockit
-            // does not document. encode_fps can change live; rate control
-            // then keeps its frame rate (venc_set_rc_attr_live).
-            frame_credit += venc_live.encode_fps;
-            if (frame_credit < fps)
+            const RK_U64 dq_us = get_us();
+            const RK_U64 ts_us = (RK_U64)buf.timestamp.tv_sec * 1000000 + (RK_U64)buf.timestamp.tv_usec;
+            if (last_ts_us != 0 && ts_us > last_ts_us)
             {
-                if (ioctl(video_dev_fd, VIDIOC_QBUF, &buf) < 0)
-                    log_error("failure VIDIOC_QBUF: %s", strerror(errno));
-                continue;
+                const RK_U64 d = ts_us - last_ts_us;
+                if (period_us == 0)
+                    period_us = d;
+                else if (d < period_us * 3 / 2)
+                    period_us = (period_us * 7 + d) / 8;
             }
-            frame_credit -= fps;
-            MB_BLK blk = RK_MPI_MMZ_Fd2Handle(tmp_plane.m.fd);
-            assert(blk != RK_NULL);
-            stFrame.stVFrame.pMbBlk = blk;
-            stFrame.stVFrame.u32TimeRef = num;
-            stFrame.stVFrame.u64PTS = get_us();
-            bool retried = false;
-        retry_send_frame:
-            if (RK_MPI_VENC_SendFrame(VENC_CHANNEL, &stFrame, 2000) != RK_SUCCESS)
+            last_ts_us = ts_us;
+            if (tm_on())
             {
-                if (retried == true)
+                pthread_mutex_lock(&tm_mutex);
+                tm_add(&tm_cap, (uint32_t)(dq_us - ts_us));
+                pthread_mutex_unlock(&tm_mutex);
+            }
+            // A frame decided early (sent or dropped) is done; any other one
+            // goes the normal way.
+            const bool decided = early_index == (int)buf.index;
+            if (early_index >= 0 && !decided)
+                log_notice("early submit missed: expected buffer %d, got %u", early_index, buf.index);
+            early_index = -1;
+            if (!decided)
+            {
+                // Drop frames evenly to encode encode_fps of fps. Done here
+                // rather than via the VENC dst frame rate, whose drop
+                // behaviour rockit does not document. encode_fps can change
+                // live; rate control then keeps its frame rate.
+                frame_credit += venc_live.encode_fps;
+                if (frame_credit >= fps)
                 {
-                    log_error("RK_MPI_VENC_SendFrame retry failed");
-                }
-                else
-                {
-                    log_error("RK_MPI_VENC_SendFrame failed,retrying");
-                    retried = true;
-                    usleep(1000llu);
-                    goto retry_send_frame;
+                    frame_credit -= fps;
+                    MB_BLK blk = RK_MPI_MMZ_Fd2Handle(tmp_plane.m.fd);
+                    assert(blk != RK_NULL);
+                    venc_submit(&stFrame, blk, num++, ts_us);
                 }
             }
-
-            num++;
-
             if (ioctl(video_dev_fd, VIDIOC_QBUF, &buf) < 0)
                 log_error("failure VIDIOC_QBUF: %s", strerror(errno));
+            const uint32_t offset_us = early_offset_us(height, period_us);
+            if (offset_us > 0 && period_us > 0)
+            {
+                const int next = (int)((buf.index + 1) % input_buffer_count);
+                const RK_U64 next_start_us = ts_us + period_us;
+                frame_credit += venc_live.encode_fps;
+                if (frame_credit >= fps)
+                {
+                    frame_credit -= fps;
+                    sleep_until_us(next_start_us + offset_us);
+                    venc_submit(&stFrame, buffers[next].mb_blk, num++, next_start_us);
+                }
+                early_index = next;
+            }
         }
     cleanup:
         log_info("cleaning up video capture device %s", VIDEO_DEV);
@@ -1892,6 +2120,9 @@ void *run_detect_format(void *arg)
 
             detected_width = dv_timings.bt.width;
             detected_height = dv_timings.bt.height;
+            if (dv_timings.bt.pixelclock > 0)
+                detected_line_ns = (uint32_t)((RK_U64)(dv_timings.bt.width + dv_timings.bt.hfrontporch + dv_timings.bt.hsync +
+                                                       dv_timings.bt.hbackporch) * 1000000000ull / dv_timings.bt.pixelclock);
             detected_fps = fps_int;
             detected_signal = true;
             video_report_format(true, NULL, detected_width, detected_height, frames_per_second);
