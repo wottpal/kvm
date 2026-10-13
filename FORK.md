@@ -407,6 +407,7 @@ It skips HTML comments and fenced code blocks.
   - `internal/audio/capture_test.go`
   - `internal/audio/opus_cgo.go`
   - `internal/audio/opus_cgo_test.go`
+  - `internal/audio/opus_stub.go`
   - `internal/native/cgo/.gitignore`
   - `internal/native/cgo/CMakeLists.txt`
 - **What:** the host's USB audio (the UAC1 gadget, 48 kHz stereo) goes out as Opus when the offer has
@@ -421,7 +422,8 @@ It skips HTML comments and fenced code blocks.
     or an overrun) moves the timestamp on by the time that passed and starts a new talkspurt.
   - libopus 1.5.2 (release tarball, SHA-256 pinned) is fetched and built by the native CMake build: static, float
     with `OPUS_FLOAT_APPROX`, `-mcpu=cortex-a7`, NEON detected at run time. It installs `lib/libopus.a` and
-    `include/opus/`, which `internal/audio` links. Fixed point would need ARMv7 assembly that libopus's CMake build
+    `include/opus/`, which `internal/audio` links on the device (`linux && arm && cgo`); other builds, such as CI's
+    host tests and lint, get a stub. Fixed point would need ARMv7 assembly that libopus's CMake build
     does not compile.
   - `getFirmwareFeatures` (D12) lists `opusAudio`.
 - **Why:** upstream sends 50 packets a second as long as audio is on, silence included, as G.722 (16 kHz mono) or
