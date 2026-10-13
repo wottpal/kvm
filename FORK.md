@@ -12,7 +12,7 @@ or removes a divergence updates this file in the same pull request.
 - **Merge base:** `8f6c3001b1064eb32b3f66afd04efbe536bbaf87` (`release/0.5.9` plus upstream `dev` up to "Revert \"Add Auto
   video quality using RTCP REMB\" (#1693)", 2026-10-05)
 - **Fork created:** 2026-10-11. Last upstream sync: 2026-10-11.
-- **Latest release:** `release/0.5.9-fork.5` (see **Releases**).
+- **Latest release:** `release/0.5.9-fork.6` (see **Releases**).
 
 ## Policy
 
@@ -458,6 +458,7 @@ upstream sync cannot start running in this fork unnoticed.
 | `release/0.5.9-fork.3` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `88dbed94a6fd1c185e7adcaa47da94d23a42151503ebaeded39aab7d0b6fd7a1` | D01–D09     | D06 live frame-rate fix (#11) and review fixes for D04, D06–D08 (#12), of `5fc9be5`; 31,547,016 bytes; installed on the maintainer's device 2026-10-11 |
 | `release/0.5.9-fork.4` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `9052cccccf3dd4355a4292728574f8d2ef21a1e2596d27dbce9923acfdc05d65` | D01–D10     | Adds D10 (capture buffers for modes up to 4.19 megapixels, #14), of `4a68d63`; 31,547,016 bytes; installed on the maintainer's device 2026-10-11 |
 | `release/0.5.9-fork.5` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `0d2305b38e21597200b09cbd1c8ef63f557dbd9916c7726040737ac7c857e091` | D01–D13     | Adds D11 (early submit), D12 (wheel over HID-RPC, getFirmwareFeatures) and D13 (client-driven region refresh), of `1dbe52c`; 31,575,784 bytes; installed on the maintainer's device 2026-10-13 |
+| `release/0.5.9-fork.6` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `67f2a0f10cb632d9e1509846277d20bd7bc81be73561e97cd91724868e68f3ce` | D01–D14     | Adds D14 (Opus audio with silence suppression), of `2575f88`; 31,993,648 bytes; installed on the maintainer's device 2026-10-13 |
 
 Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.9-fork.1`, where
 `<upstream version>` is the latest upstream release in the merge base. The binary itself is built with upstream's
