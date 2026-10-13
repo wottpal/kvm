@@ -1,7 +1,8 @@
 # Fork divergences
 
 This repository is a fork of [jetkvm/kvm](https://github.com/jetkvm/kvm) (GPL-2.0), the JetKVM device firmware. It
-tunes the video encoder for desktop content and adds the encoder control that the BlitzKVM app uses. This file lists
+tunes the video encoder for desktop content, adds the encoder control that the BlitzKVM app uses and streams the
+host's audio as Opus. This file lists
 every **divergence**: each change that makes this fork differ from upstream `dev`. A pull request that adds, changes
 or removes a divergence updates this file in the same pull request.
 
@@ -16,7 +17,7 @@ or removes a divergence updates this file in the same pull request.
 ## Policy
 
 - **Firmware only.** The fork never changes the web UI (`ui/`), the device's persisted configuration or its update
-  mechanism. Every divergence lives in the video path and its control API.
+  mechanism. Every divergence lives in the video or audio path and its control API.
 - **Defaults change for every client.** Encoder divergences change what every client gets, the web UI included.
   Runtime overrides stay in memory and drop back to those defaults whenever the stream stops or another session
   takes over.
@@ -390,6 +391,45 @@ It skips HTML comments and fenced code blocks.
   refreshes only what changed: an 880×224 text rect went from 44.3 to 49.3 dB in one 41.5 KB P-frame, the rest
   untouched. Without forced intra it reached 46.0 dB; QP 1 and QP 8 gave the same result at `minQp` 18. Verified on the device (2400×1012, busy desktop page, `minQp` 10): an 880×224 text rect went from 50.2 to 55.3 dB in one 54 KB P-frame, leaving the rest untouched; a full refresh was 355 KB (59.1 dB).
 - **Remove when:** upstream lets a client drive the encoder's refreshes.
+
+### D14 — Opus audio with silence suppression
+
+- **Since:** 2026-10-13
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `audio.go`
+  - `jsonrpc.go`
+  - `webrtc.go`
+  - `webrtc_test.go`
+  - `internal/audio/alsa_capture_cgo.go`
+  - `internal/audio/capture.go`
+  - `internal/audio/capture_test.go`
+  - `internal/audio/opus_cgo.go`
+  - `internal/audio/opus_cgo_test.go`
+  - `internal/native/cgo/.gitignore`
+  - `internal/native/cgo/CMakeLists.txt`
+- **What:** the host's USB audio (the UAC1 gadget, 48 kHz stereo) goes out as Opus when the offer has
+  `opus/48000/2`, and only while it is not silent.
+  - Opus: 48 kHz stereo, 20 ms frames, restricted low delay (CELT only, 5 ms look-ahead), 128 kbit/s VBR,
+    complexity 3, signal type music; `fmtp` `minptime=10;useinbandfec=0;stereo=1;sprop-stereo=1`. Offers without
+    Opus get G.722, then PCMU, as before. Browsers offer Opus, so the web UI gets it too.
+  - Silence suppression for every codec: a frame whose samples all lie within ±2 is neither encoded nor sent. The
+    track is a `TrackLocalStaticRTP` with the fork's packetization: the RTP timestamp advances one frame per frame
+    read, the marker bit starts each talkspurt, and sequence numbers stay continuous, so receivers see a timestamp
+    jump rather than loss (RFC 3551, RFC 7587). A gap longer than ALSA's 80 ms buffer (the host stopped streaming,
+    or an overrun) moves the timestamp on by the time that passed and starts a new talkspurt.
+  - libopus 1.5.2 (release tarball, SHA-256 pinned) is fetched and built by the native CMake build: static, float
+    with `OPUS_FLOAT_APPROX`, `-mcpu=cortex-a7`, NEON detected at run time. It installs `lib/libopus.a` and
+    `include/opus/`, which `internal/audio` links. Fixed point would need ARMv7 assembly that libopus's CMake build
+    does not compile.
+  - `getFirmwareFeatures` (D12) lists `opusAudio`.
+- **Why:** upstream sends 50 packets a second as long as audio is on, silence included, as G.722 (16 kHz mono) or
+  PCMU (8 kHz mono). Measured on the device (Mac host playing into the gadget): 50 packets and about 128 kbit/s a
+  second while sound plays, nothing while it is silent or the host is not streaming. The Go app's CPU rises by about
+  7 % of the core while sound plays (Opus 3.6–4.1 %, SRTP and the send about 2.9 %, the ALSA read about 1 %) and
+  0.1 % while silent. Packets arrived at most about 50 ms behind their timestamps on the LAN.
+- **Remove when:** upstream streams Opus and suppresses silence.
 
 ## Repository settings
 

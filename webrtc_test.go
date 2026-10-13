@@ -65,7 +65,7 @@ func TestStartNativeVideoForSessionSetsCodecBeforeStart(t *testing.T) {
 
 func TestLastSessionDisconnectedPreservesReplacementAudio(t *testing.T) {
 	// Do not run in parallel: this exercises the package's global session state.
-	track, err := webrtc.NewTrackLocalStaticSample(
+	track, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}, "audio", "replacement")
 	if err != nil {
 		t.Fatal(err)
@@ -145,5 +145,29 @@ func TestLastSessionDisconnectedPreservesReplacementAudio(t *testing.T) {
 	}
 	if audioTrack != nil || audioCancel != nil || audioStopped != nil {
 		t.Error("owner teardown did not clear replacement audio ownership")
+	}
+}
+
+func TestNegotiateAudioCodecPrefersOpus(t *testing.T) {
+	tests := []struct {
+		name  string
+		offer string
+		want  string
+	}{
+		{"opus first", "a=rtpmap:111 opus/48000/2\r\na=rtpmap:9 G722/8000\r\na=rtpmap:0 PCMU/8000\r\n", webrtc.MimeTypeOpus},
+		{"g722 without opus", "a=rtpmap:9 G722/8000\r\na=rtpmap:0 PCMU/8000\r\n", webrtc.MimeTypeG722},
+		{"pcmu only", "a=rtpmap:0 PCMU/8000\r\n", webrtc.MimeTypePCMU},
+		{"no audio", "a=rtpmap:96 H264/90000\r\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := negotiateAudioCodec(tt.offer)
+			if got.MimeType != tt.want {
+				t.Fatalf("codec = %q, want %q", got.MimeType, tt.want)
+			}
+			if tt.want == webrtc.MimeTypeOpus && (got.ClockRate != 48000 || got.Channels != 2) {
+				t.Fatalf("opus = %d Hz, %d channels; want 48000 Hz stereo", got.ClockRate, got.Channels)
+			}
+		})
 	}
 }

@@ -39,9 +39,29 @@ FetchContent_Declare(
     )
 FetchContent_MakeAvailable(lvgl)
 
+# Opus for audio (D14): a static library installed next to the native one
+# (lib/libopus.a, include/opus/), which internal/audio links. Float build
+# (its CMake can't build the ARMv7 asm fixed point needs); NEON is detected at
+# run time.
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_FORTIFY_SOURCE OFF CACHE BOOL "" FORCE)
+set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "" FORCE)
+set(OPUS_FLOAT_APPROX ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    opus
+    URL https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+    URL_HASH SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
+    )
+FetchContent_MakeAvailable(opus)
+# Schedule for the in-order Cortex-A7 (RV1106) instead of generic ARMv7.
+target_compile_options(opus PRIVATE -mcpu=cortex-a7)
+
 # Get source files, excluding CMake generated files
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.c" "ui/*.c")
 list(FILTER sources EXCLUDE REGEX "CMakeFiles.*CompilerId.*\\.c$")
+# libopus builds as its own target (D14); its fetched sources sit under build/.
+list(FILTER sources EXCLUDE REGEX "/_deps/opus-")
 # Exclude main.c from library sources (it's used for the binary target)
 list(FILTER sources EXCLUDE REGEX "main\\.c$")
 

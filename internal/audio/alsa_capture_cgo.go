@@ -288,6 +288,7 @@ type ALSACapture struct {
 	g722        []byte
 	mono16k     []int16
 	g722Encoder *G722Encoder
+	opus        *OpusEncoder // created on first use
 }
 
 func OpenALSACapture(device string) (*ALSACapture, error) {
@@ -320,9 +321,15 @@ func OpenALSACapture(device string) (*ALSACapture, error) {
 	return capture, nil
 }
 
+// ReadEncoded reads and encodes one frame. A frame of digital silence gives
+// no payload (D14): a host that keeps the device open while nothing plays
+// sends zeros, which are worth neither encoding nor a packet.
 func (c *ALSACapture) ReadEncoded(codec Codec) ([]byte, error) {
 	if err := c.readPCM(); err != nil {
 		return nil, err
+	}
+	if isSilent(c.pcm16) {
+		return nil, nil
 	}
 
 	switch codec {
@@ -330,6 +337,15 @@ func (c *ALSACapture) ReadEncoded(codec Codec) ([]byte, error) {
 		return c.encodeG722(), nil
 	case CodecPCMU:
 		return c.encodePCMU(), nil
+	case CodecOpus:
+		if c.opus == nil {
+			enc, err := NewOpusEncoder()
+			if err != nil {
+				return nil, err
+			}
+			c.opus = enc
+		}
+		return c.opus.Encode(c.pcm16)
 	default:
 		return nil, fmt.Errorf("unsupported audio codec: %s", codec)
 	}
@@ -387,6 +403,10 @@ func (c *ALSACapture) encodeG722() []byte {
 }
 
 func (c *ALSACapture) Close() error {
+	if c.opus != nil {
+		c.opus.Close()
+		c.opus = nil
+	}
 	if c.handle != nil {
 		C.jk_alsa_capture_close((*C.jk_alsa_capture)(c.handle))
 		c.handle = nil

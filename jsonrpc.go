@@ -205,9 +205,10 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // use them only where they exist (D12). "hidrpcWheel": wheel reports over
 // HID-RPC (0x04: vertical, horizontal), in order with pointer reports.
 // "refreshRegions": rpcRefreshRegions and the autoRefresh encoder parameter
-// (D13).
+// (D13). "opusAudio": audio in Opus, 48 kHz stereo, for an offer with
+// opus/48000/2, silent frames not sent (D14).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {

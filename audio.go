@@ -3,6 +3,7 @@ package kvm
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,18 +12,18 @@ import (
 	"time"
 
 	"github.com/jetkvm/kvm/internal/audio"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
-	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 var (
 	audioCancel  context.CancelFunc
 	audioStopped chan struct{}
-	audioTrack   *webrtc.TrackLocalStaticSample
+	audioTrack   *webrtc.TrackLocalStaticRTP
 	audioMu      sync.Mutex
 )
 
-func startAudio(track *webrtc.TrackLocalStaticSample) {
+func startAudio(track *webrtc.TrackLocalStaticRTP) {
 	audioMu.Lock()
 	defer audioMu.Unlock()
 	stopAudioLocked()
@@ -44,7 +45,7 @@ func stopAudio() {
 // stopAudioIfOwner stops the audio capture only if it is currently bound to
 // track. Used on session teardown so capture doesn't keep writing samples to
 // a track whose peer connection has closed.
-func stopAudioIfOwner(track *webrtc.TrackLocalStaticSample) {
+func stopAudioIfOwner(track *webrtc.TrackLocalStaticRTP) {
 	audioMu.Lock()
 	defer audioMu.Unlock()
 	if audioTrack != track {
@@ -70,11 +71,17 @@ func stopAudioLocked() {
 // the handle is dead — typically a USB gadget rebuild or host reattach.
 const reopenThreshold = 5
 
-func runAudioCapture(ctx context.Context, track *webrtc.TrackLocalStaticSample, stopped chan<- struct{}) {
+// audioFrame is the capture's frame length; one frame is one RTP packet.
+const audioFrame = 20 * time.Millisecond
+
+func runAudioCapture(ctx context.Context, track *webrtc.TrackLocalStaticRTP, stopped chan<- struct{}) {
 	defer close(stopped)
 
 	codec := audio.CodecPCMU
-	if strings.EqualFold(track.Codec().MimeType, webrtc.MimeTypeG722) {
+	switch {
+	case strings.EqualFold(track.Codec().MimeType, webrtc.MimeTypeOpus):
+		codec = audio.CodecOpus
+	case strings.EqualFold(track.Codec().MimeType, webrtc.MimeTypeG722):
 		codec = audio.CodecG722
 	}
 
@@ -87,7 +94,19 @@ func runAudioCapture(ctx context.Context, track *webrtc.TrackLocalStaticSample, 
 	audioLogger.Info().Str("codec", codec.String()).Msg("audio capture started")
 	defer audioLogger.Info().Msg("audio capture stopped")
 
-	sample := media.Sample{Duration: 20 * time.Millisecond}
+	// One frame per packet. The timestamp advances a frame for every frame
+	// read; silent frames are not sent (D14), so speech or sound after a
+	// silence starts with a timestamp jump and the marker bit, the
+	// discontinuous transmission of RFC 3551 and RFC 7587. Sequence numbers
+	// stay continuous, so receivers see no loss. A gap longer than ALSA's
+	// buffer (4 periods) means the host stopped streaming or samples were
+	// lost: the timestamp catches up with the time that passed and a new
+	// talkspurt starts, so a receiver doesn't take the next packet as late.
+	clockRate := float64(track.Codec().ClockRate)
+	ticks := uint32(audioFrame.Seconds() * clockRate)
+	packet := &rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: uint16(rand.Uint32()), Timestamp: rand.Uint32()}}
+	talking := false
+	lastFrame := time.Now()
 	consecutiveErrors := 0
 
 	for {
@@ -126,13 +145,26 @@ func runAudioCapture(ctx context.Context, track *webrtc.TrackLocalStaticSample, 
 		}
 
 		consecutiveErrors = 0
+		now := time.Now()
+		if gap := now.Sub(lastFrame); gap > 5*audioFrame {
+			packet.Timestamp += uint32((gap - audioFrame).Seconds() * clockRate)
+			talking = false
+		}
+		lastFrame = now
 		if len(payload) == 0 {
+			talking = false
+			packet.Timestamp += ticks
 			continue
 		}
 
-		sample.Data = payload
-		if err := track.WriteSample(sample); err != nil {
-			audioLogger.Warn().Err(err).Msg("audio sample write failed")
+		packet.Marker = !talking
+		packet.Payload = payload
+		err = track.WriteRTP(packet)
+		talking = true
+		packet.SequenceNumber++
+		packet.Timestamp += ticks
+		if err != nil {
+			audioLogger.Warn().Err(err).Msg("audio packet write failed")
 			time.Sleep(100 * time.Millisecond)
 		}
 	}

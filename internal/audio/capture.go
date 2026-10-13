@@ -17,6 +17,7 @@ type Codec int
 const (
 	CodecPCMU Codec = iota
 	CodecG722
+	CodecOpus // 48 kHz stereo (D14)
 )
 
 func (c Codec) String() string {
@@ -25,6 +26,8 @@ func (c Codec) String() string {
 		return "G722"
 	case CodecPCMU:
 		return "PCMU"
+	case CodecOpus:
+		return "Opus"
 	default:
 		return "unknown"
 	}
@@ -33,3 +36,16 @@ func (c Codec) String() string {
 // ErrNoAudioData is returned when the capture device produced no frames this
 // poll cycle. The caller should retry; it is not a fatal error.
 var ErrNoAudioData = errors.New("audio capture idle")
+
+// silenceLevel: a frame whose samples all stay within it is digital silence
+// (a host's mixer outputs exact zeros, dither stays within a few LSB).
+const silenceLevel = 2
+
+func isSilent(pcm []int16) bool {
+	for _, v := range pcm {
+		if v > silenceLevel || v < -silenceLevel {
+			return false
+		}
+	}
+	return true
+}

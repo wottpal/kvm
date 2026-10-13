@@ -29,7 +29,7 @@ import (
 type Session struct {
 	peerConnection           *webrtc.PeerConnection
 	VideoTrack               *webrtc.TrackLocalStaticSample
-	AudioTrack               *webrtc.TrackLocalStaticSample
+	AudioTrack               *webrtc.TrackLocalStaticRTP
 	ControlChannel           *webrtc.DataChannel
 	RPCChannel               *webrtc.DataChannel
 	HidChannel               *webrtc.DataChannel
@@ -136,17 +136,22 @@ type SessionConfig struct {
 	MDNSMode   string
 }
 
-// negotiateAudioCodec returns the audio MIME type to use, or "" if the browser
-// offer advertises no supported audio codec.
-func negotiateAudioCodec(offerSDP string) string {
+// negotiateAudioCodec returns the audio codec to send, or an empty MimeType
+// if the offer advertises no supported audio codec. Opus (48 kHz stereo,
+// D14) comes first: full-band stereo at about the bitrate G.722 needs for
+// one 16 kHz channel.
+func negotiateAudioCodec(offerSDP string) webrtc.RTPCodecCapability {
 	upper := strings.ToUpper(offerSDP)
 	switch {
+	case strings.Contains(upper, "OPUS/48000/2"):
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+			SDPFmtpLine: "minptime=10;useinbandfec=0;stereo=1;sprop-stereo=1"}
 	case strings.Contains(upper, "G722/8000"):
-		return webrtc.MimeTypeG722
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeG722, ClockRate: 8000}
 	case strings.Contains(upper, "PCMU/8000"):
-		return webrtc.MimeTypePCMU
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}
 	}
-	return ""
+	return webrtc.RTPCodecCapability{}
 }
 
 // attachAudioTrack adds an outgoing audio track when audio is enabled, the USB
@@ -157,13 +162,12 @@ func (s *Session) attachAudioTrack(offerSDP string) error {
 		webrtcLogger.Debug().Msg("audio disabled by device config")
 		return nil
 	}
-	audioMime := negotiateAudioCodec(offerSDP)
-	if audioMime == "" {
+	codec := negotiateAudioCodec(offerSDP)
+	if codec.MimeType == "" {
 		webrtcLogger.Warn().Msg("browser offer has no supported audio codec; audio disabled")
 		return nil
 	}
-	track, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: audioMime, ClockRate: 8000}, "audio", "kvm")
+	track, err := webrtc.NewTrackLocalStaticRTP(codec, "audio", "kvm")
 	if err != nil {
 		return err
 	}
@@ -172,7 +176,7 @@ func (s *Session) attachAudioTrack(offerSDP string) error {
 		return err
 	}
 	s.AudioTrack = track
-	webrtcLogger.Info().Str("codec", audioMime).Msg("audio track enabled")
+	webrtcLogger.Info().Str("codec", codec.MimeType).Msg("audio track enabled")
 	go drainRTCP(sender, nil)
 	return nil
 }
