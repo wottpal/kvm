@@ -18,7 +18,8 @@ or removes a divergence updates this file in the same pull request.
 
 - **Firmware only.** The fork never changes the web UI (`ui/`), the device's persisted configuration or its update
   mechanism. Every divergence lives in the video, audio or input path and its control API, or hardens the device's
-  security (D15) without changing what it stores.
+  security (D15, D16). The only state the fork stores is D16's flag file, outside the configuration; stock firmware
+  ignores it.
 - **Defaults change for every client.** Encoder divergences change what every client gets, the web UI included.
   Runtime overrides stay in memory and drop back to those defaults whenever the stream stops or another session
   takes over.
@@ -520,6 +521,35 @@ It skips HTML comments and fenced code blocks.
   user visited, not just to the LAN.
 - **Remove when:** each item when upstream ships an equivalent.
 
+### D16 — Browser access switch
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `browser_access.go`
+  - `web.go`
+  - `jsonrpc.go`
+  - `web_guard_test.go`
+  - `internal/webguard/`
+- **What:** a client can turn browser access off. The device's HTTP and HTTPS servers then answer every request
+  from a web browser with a 403 that says why, so only native clients such as BlitzKVM reach the device; BlitzKVM's
+  JetKVM Setup offers the switch.
+  - **API:** JSON-RPC `getBrowserAccessState` and `setBrowserAccessState` (`{"enabled": bool}`), listed as
+    `browserAccess` by `getFirmwareFeatures`. The web UI does not show it.
+  - **Browsers:** a request with `Origin` or `Sec-Fetch-Site`, or whose `User-Agent` starts with `Mozilla/` (every
+    browser's, and all a navigation over plain HTTP carries). Native clients send none of them (the BlitzKVM engine,
+    URLSession, curl). Firefox lets a page set its own `User-Agent` for requests to its own origin, but no page can
+    drop `Origin`, which every WebSocket handshake and POST carries: what starts a session or changes state is always
+    refused.
+  - **State:** the flag file `/userdata/jetkvm/browser-access.off`, read with every browser request, so removing it
+    over SSH takes effect at once. It is not a configuration key: stock firmware ignores it, so going back to it turns
+    browser access on again, and a factory reset removes it. Sessions already running stay; the cloud's sessions
+    (`app.jetkvm.com`) do not go through the device's web servers and are not affected.
+- **Why:** the web UI is how other sites reach the device through the user's browser (cross-site requests, DNS
+  rebinding, a malicious extension; see D15). Someone who only uses a native client can take that surface away.
+- **Remove when:** upstream ships an equivalent switch.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -605,9 +635,11 @@ copy files with `ssh ... "cat > file" < file`.
 ## Rollback notes
 
 - **Firmware:** install upstream's `jetkvm_app` the same way (the backup, or the release binary with its `.sha256`
-  and `.sig`). The fork persists nothing of its own (encoder overrides live in memory, no configuration keys are
-  added), so the stock app starts from the same configuration.
+  and `.sig`). The fork adds no configuration keys (encoder overrides live in memory), so the stock app starts from
+  the same configuration; it ignores D16's flag file.
 - **D15:** stock firmware drops these protections again; the session cookie stays valid (the token is unchanged)
   and the TLS certificates already minted stay in the store.
+- **D16:** stock firmware answers browsers again whatever the flag says. `rm /userdata/jetkvm/browser-access.off`
+  (SSH in developer mode) turns browser access back on without BlitzKVM.
 - **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
   "method not found" from stock firmware; the BlitzKVM app then falls back to the stream quality factor.

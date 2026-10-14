@@ -134,6 +134,7 @@ func setupRouter() *gin.Engine {
 		c.Next()
 	})
 
+	r.Use(browserAccessMiddleware())
 	r.Use(browserGuardMiddleware())
 
 	// Add a custom middleware to set cache headers for images

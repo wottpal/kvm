@@ -3,7 +3,9 @@
 // through the user's browser: neither by a cross-site request carrying the
 // session cookie (CSRF, cross-site WebSocket hijacking), nor, while the device
 // has no password, by a DNS name the attacker rebinds to the device's address.
-// It is plain Go, so it builds and tests on any host.
+// IsBrowser tells browsers from native clients, for the device's switch that
+// turns browser access off (D16). It is plain Go, so it builds and tests on
+// any host.
 package webguard
 
 import (
@@ -149,4 +151,16 @@ func matchName(host, name string) bool {
 		return found && label != "" && rest == domain
 	}
 	return name != "" && host == name
+}
+
+// IsBrowser reports whether r comes from a web browser (D16). Browsers send
+// Origin or Sec-Fetch-Site with what a page sends, and every browser's
+// User-Agent starts with "Mozilla/", which is all a navigation over plain
+// HTTP carries. Native clients (the BlitzKVM engine, curl, URLSession) send
+// none of them. Firefox lets a page set User-Agent on requests to its own
+// origin, but no page can drop Origin, which every WebSocket handshake and
+// POST carries: what starts a session or changes state is always caught.
+func IsBrowser(r *http.Request) bool {
+	return r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" ||
+		strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/")
 }

@@ -177,3 +177,27 @@ func TestLocalHostLooksUpNamesLast(t *testing.T) {
 		t.Fatal("a single-label name with no names passed")
 	}
 }
+
+func TestIsBrowser(t *testing.T) {
+	const safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{"navigation over http", map[string]string{"User-Agent": safari}, true},
+		{"page request over https", map[string]string{"Sec-Fetch-Site": "same-origin"}, true},
+		{"WebSocket from a page", map[string]string{"Origin": "http://192.168.1.50"}, true},
+		{"BlitzKVM engine (Go)", map[string]string{"User-Agent": "Go-http-client/1.1"}, false},
+		{"BlitzKVM app (URLSession)", map[string]string{"User-Agent": "BlitzKVM/120 CFNetwork/3860.100.1 Darwin/25.0.0"}, false},
+		{"curl", map[string]string{"User-Agent": "curl/8.7.1"}, false},
+		{"no headers", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsBrowser(request(http.MethodGet, "192.168.1.50", tt.headers)); got != tt.want {
+				t.Fatalf("IsBrowser = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

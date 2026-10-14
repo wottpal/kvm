@@ -208,9 +208,10 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // HID-RPC (0x04: vertical, horizontal), in order with pointer reports.
 // "refreshRegions": rpcRefreshRegions and the autoRefresh encoder parameter
 // (D13). "opusAudio": audio in Opus, 48 kHz stereo, for an offer with
-// opus/48000/2, silent frames not sent (D14).
+// opus/48000/2, silent frames not sent (D14). "browserAccess":
+// getBrowserAccessState and setBrowserAccessState (D16).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions", "opusAudio"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
@@ -963,6 +964,7 @@ var factoryResetPaths = []string{
 	serialSettingsPath,
 	SerialCommandHistoryPath,
 	failsafeDefaultLastCrashPath,
+	browserAccessOffFile, // D16
 }
 
 func rpcFactoryReset() error {
@@ -1563,6 +1565,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"setVideoEncoderParams":      {Func: rpcSetVideoEncoderParams, Params: []string{"params"}},
 	"requestKeyframe":            {Func: rpcRequestKeyframe},
 	"refreshRegions":             {Func: rpcRefreshRegions, Params: []string{"rects", "qp"}, OptionalParams: []string{"frames"}},
+	"getBrowserAccessState":      {Func: rpcGetBrowserAccessState},
+	"setBrowserAccessState":      {Func: rpcSetBrowserAccessState, Params: []string{"enabled"}},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},
 	"setVideoCodecPreference":    {Func: rpcSetVideoCodecPreference, Params: []string{"codec"}},

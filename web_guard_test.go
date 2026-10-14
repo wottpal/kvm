@@ -5,6 +5,7 @@ package kvm
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,5 +105,44 @@ func TestAuthCookieIsSameSiteStrict(t *testing.T) {
 		if !strings.Contains(cookie, attr) {
 			t.Fatalf("Set-Cookie %q lacks %s", cookie, attr)
 		}
+	}
+}
+
+func TestBrowserAccessOff(t *testing.T) {
+	saved := browserAccessOffFile
+	browserAccessOffFile = filepath.Join(t.TempDir(), "browser-access.off")
+	t.Cleanup(func() { browserAccessOffFile = saved })
+	r := withAuthMode(t, "noPassword")
+	const host = "192.168.1.50"
+	browser := map[string]string{"User-Agent": "Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 Safari/605.1.15"}
+	handshake := map[string]string{
+		"Origin": "http://" + host, "Connection": "Upgrade", "Upgrade": "websocket",
+		"Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+	}
+	engine := map[string]string{"User-Agent": "Go-http-client/1.1"}
+
+	if code := serve(r, http.MethodGet, "/device/status", host, browser); code != http.StatusOK {
+		t.Fatalf("browser, access on: %d, want 200", code)
+	}
+	if err := rpcSetBrowserAccessState(false); err != nil {
+		t.Fatal(err)
+	}
+	if rpcGetBrowserAccessState().Enabled {
+		t.Fatal("access still reported on")
+	}
+	if code := serve(r, http.MethodGet, "/device/status", host, browser); code != http.StatusForbidden {
+		t.Fatalf("browser, access off: %d, want 403", code)
+	}
+	if code := serve(r, http.MethodGet, "/webrtc/signaling/client", host, handshake); code != http.StatusForbidden {
+		t.Fatalf("browser signaling, access off: %d, want 403", code)
+	}
+	if code := serve(r, http.MethodGet, "/device/status", host, engine); code != http.StatusOK {
+		t.Fatalf("native client, access off: %d, want 200", code)
+	}
+	if err := rpcSetBrowserAccessState(true); err != nil {
+		t.Fatal(err)
+	}
+	if code := serve(r, http.MethodGet, "/device/status", host, browser); code != http.StatusOK {
+		t.Fatalf("browser, access back on: %d, want 200", code)
 	}
 }
