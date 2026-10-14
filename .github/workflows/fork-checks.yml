@@ -22,3 +22,18 @@ jobs:
           git fetch --no-tags upstream dev
       - name: Audit FORK.md against upstream
         run: python3 scripts/fork/audit_divergence.py --upstream-ref upstream/dev
+
+  tests-32bit:
+    # The device's int is 32 bits; some fixes only show there (D15).
+    name: Fork tests with a 32-bit int
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+      - name: Test the fork's plain Go packages on linux/386
+        env:
+          GOARCH: "386"
+          CGO_ENABLED: "0"
+        run: go test ./internal/hidrpc/ ./internal/webguard/ ./internal/redact/ ./internal/websecure/ ./internal/native/refresh/

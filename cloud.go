@@ -255,8 +255,6 @@ func handleCloudRegister(c *gin.Context) {
 		return
 	}
 
-	config.CloudToken = tokenResp.SecretToken
-
 	provider, err := oidc.NewProvider(c, "https://accounts.google.com")
 	if err != nil {
 		cloudLogger.Error().Err(err).Msg("failed to initialize OIDC provider")
@@ -276,6 +274,9 @@ func handleCloudRegister(c *gin.Context) {
 		return
 	}
 
+	// Both only now, once the owner's ID token verified (D15): the running
+	// config used to keep the cloud token of a registration that failed here.
+	config.CloudToken = tokenResp.SecretToken
 	config.GoogleIdentity = idToken.Audience[0] + ":" + idToken.Subject
 
 	// Save the updated configuration

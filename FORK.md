@@ -17,7 +17,9 @@ or removes a divergence updates this file in the same pull request.
 ## Policy
 
 - **Firmware only.** The fork never changes the web UI (`ui/`), the device's persisted configuration or its update
-  mechanism. Every divergence lives in the video or audio path and its control API.
+  mechanism. Every divergence lives in the video, audio or input path and its control API, or hardens the device's
+  security (D15, D16). The only state the fork stores is D16's flag file, outside the configuration; stock firmware
+  ignores it.
 - **Defaults change for every client.** Encoder divergences change what every client gets, the web UI included.
   Runtime overrides stay in memory and drop back to those defaults whenever the stream stops or another session
   takes over.
@@ -68,7 +70,8 @@ It skips HTML comments and fenced code blocks.
   request. Every file that differs from the merge base with upstream `dev` must be listed under a divergence, every
   listed path must still differ, a directory entry may only name a directory the fork adds, and every workflow file
   must be in the workflow inventory. Run it locally with `python3 scripts/fork/audit_divergence.py` after
-  `git fetch upstream dev` (`--staged` audits the index before committing).
+  `git fetch upstream dev` (`--staged` audits the index before committing). Since D15 the workflow also runs the fork's
+  plain Go tests on linux/386.
 - **Remove when:** never (fork-only).
 
 ### D03 — Color signaling matches the HDMI bridge
@@ -433,6 +436,120 @@ It skips HTML comments and fenced code blocks.
   0.1 % while silent. Packets arrived at most about 50 ms behind their timestamps on the LAN.
 - **Remove when:** upstream streams Opus and suppresses silence.
 
+### D15 — Security hardening
+
+- **Since:** 2026-10-15
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `web.go`
+  - `web_tls.go`
+  - `web_guard_test.go`
+  - `cloud.go`
+  - `hidrpc.go`
+  - `jsonrpc.go`
+  - `terminal.go`
+  - `webrtc.go`
+  - `internal/hidrpc/message.go`
+  - `internal/hidrpc/message_test.go`
+  - `internal/native/cgo/log.h`
+  - `internal/websecure/selfsign.go`
+  - `internal/websecure/selfsign_test.go`
+  - `internal/websecure/store.go`
+  - `internal/redact/`
+  - `internal/webguard/`
+  - `pkg/nmlite/hostname.go`
+  - `.github/workflows/fork-checks.yml`
+- **What:** a web page on another site can no longer drive the device through the user's browser, and a client can
+  no longer crash the app or fill the device's storage with malformed input.
+  - **Cross-origin requests** (`internal/webguard`, a middleware on every route of the HTTP and HTTPS servers): a
+    WebSocket handshake or any request but GET, HEAD and OPTIONS from a page of another origin gets a 403, with the
+    rules of Go's `http.CrossOriginProtection` (Go 1.25; the module's `go` version is older): `Sec-Fetch-Site`, which
+    browsers send to HTTPS and `localhost`, decides when present (`same-origin` and `none` pass); without it the
+    `Origin` host must equal the `Host` header, so `null`, another site and a browser extension's origin fail. Upstream
+    accepted signaling WebSockets from any origin (`InsecureSkipVerify`) and JSON bodies sent as `text/plain` forms, so
+    any page the user opened could start a session and type on the host (in noPassword mode, or in password mode with a
+    browser that sends cookies without SameSite) or register the device to another cloud account. Clients that are not
+    browsers send neither header and pass (curl, the BlitzKVM engine), as do the Vite dev proxy and HTTPS reverse
+    proxies that rewrite `Host` (the browser sends `Sec-Fetch-Site: same-origin` there).
+  - **DNS rebinding:** while the device has no password (noPassword mode, or not set up yet), it answers only requests
+    addressed to an IP address, to its own host name, FQDN or mDNS name, in TLS mode custom to a name of the uploaded
+    certificate (a wildcard covers one label: its owner vouches for these names), or to a name under a suffix public
+    DNS does not resolve to an address the page picks: `.local`, `.localhost`, `.home.arpa`, `.alt`, `.test`,
+    `.invalid`, the undelegated `.lan`, `.home`, `.internal`, `.localdomain`, `.intranet`, `.corp`, `.private`, and
+    Tailscale's `.ts.net`. Any other `Host` gets a 403 that says so; a rebinding page uses a public name. Other
+    single-label names are refused, as a resolver may complete them with a search domain. Native clients are held to
+    the same names: Firefox lets a rebinding page set its own User-Agent, so a request cannot prove it is not a
+    browser. In password mode a rebinding page still reaches what needs no login: the login (whose failures lock out
+    the user's own address), `/device/status` and `/metrics`. The host names are looked up only for a `Host` that is
+    neither an address nor a local name, and the host name setter now takes the lock its getters take. A reverse
+    proxy over plain HTTP must pass the browser's `Host` (nginx: `proxy_set_header Host $host`): browsers send no
+    `Sec-Fetch-Site` there, so with a rewritten `Host` the `Origin` check refuses POSTs and signaling. Rejected
+    requests are logged at info level, as a page can send them in a loop.
+  - **Session cookie:** `SameSite=Strict`. Not `Secure` over HTTPS: the device keeps answering plain HTTP, and a
+    browser would then refuse the HTTP login's cookie. The token is compared in constant time.
+  - **Password checks** (login, the Basic auth of `/developer/`, and changing or turning off the password; the last
+    three now count against the login's rate limit) run one at a time: the limit is checked before and recorded after
+    bcrypt, so parallel attempts all passed it.
+  - **Secrets out of logs:** the Google ID token of a cloud session request; JSON-RPC parameters, with password,
+    passphrase, PSK, secret, token, private-key and OIDC values and the credentials in URLs masked
+    (`internal/redact`; they reached the app log with every failing call, e.g. the MQTT password or the TLS private
+    key); a JSON-RPC message that does not parse (now its length only); HID-RPC bytes, i.e. keystrokes and pasted text,
+    now at debug level only (they went with every "slow message" warning, so with every paste, and an inverted check
+    in `webrtc.go` added them to warnings at the default level). The diagnostics download masks the MQTT password.
+  - **Cloud registration** sets the cloud token only once the Google ID token in the request verified; the running
+    config used to keep the token of a registration that failed there.
+  - **Self-signed TLS** (`internal/websecure`): a certificate is minted per TLS server name a client sends, before
+    any authentication. Handshakes read the store's map while another wrote it (a fatal concurrent map access: a few
+    parallel handshakes with new names ended the app) and could mint two CAs; the store's lock now covers it. After 32
+    certificates, a new name a client chose gets the default domain's certificate instead of a new one on disk; the
+    default domain, the address the connection reached and the device's own host name, FQDN and mDNS name are always
+    minted.
+  - **HID-RPC:** the keypress, keyboard, mouse, macro and macro-state reports check their length (a short one
+    panicked, and a panic in a HID queue ends the app); the macro's length check is computed in 64 bits: with the
+    device's 32-bit `int`, a step count of 954437177 passed it for a one-byte body and the parser panicked
+    (`makeslice: cap out of range`). A panic while handling a message is logged and the message dropped. The
+    `fork-checks` workflow runs the fork's plain Go tests on linux/386 for the 32-bit cases.
+  - **Terminal:** the `terminal` channel's root shell runs only in developer mode. The web UI opens the channel with
+    every session but shows the terminal only in developer mode, while the device started a shell for every session.
+    The shell starts when the channel opens in developer mode, else with the first message once it is on (with the
+    last window size the client sent), and ends when developer mode is turned off. This narrows what a session starts
+    by default; it is not an access boundary, since a session can turn developer mode on.
+  - **Native logs:** messages are formatted with `snprintf`, truncated at the 1 KiB buffer instead of overflowing it.
+- **Why:** the device holds a keyboard, a mouse and a screen of the host: whoever drives a session controls that
+  computer. The browser is the client most exposed to other sites, and noPassword mode was open to every page the
+  user visited, not just to the LAN.
+- **Remove when:** each item when upstream ships an equivalent.
+
+### D16 — Browser access switch
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `browser_access.go`
+  - `web.go`
+  - `jsonrpc.go`
+  - `web_guard_test.go`
+  - `internal/webguard/`
+- **What:** a client can turn browser access off. The device's HTTP and HTTPS servers then answer every request
+  from a web browser with a 403 that says why, so only native clients such as BlitzKVM reach the device; BlitzKVM's
+  JetKVM Setup offers the switch.
+  - **API:** JSON-RPC `getBrowserAccessState` and `setBrowserAccessState` (`{"enabled": bool}`), listed as
+    `browserAccess` by `getFirmwareFeatures`. The web UI does not show it.
+  - **Browsers:** a request with `Origin` or `Sec-Fetch-Site`, or whose `User-Agent` starts with `Mozilla/` (every
+    browser's, and all a navigation over plain HTTP carries). Native clients send none of them (the BlitzKVM engine,
+    URLSession, curl). Firefox lets a page set its own `User-Agent` for requests to its own origin, but no page can
+    drop `Origin`, which every WebSocket handshake and POST carries: what starts a session or changes state is always
+    refused.
+  - **State:** the flag file `/userdata/jetkvm/browser-access.off`, read with every browser request, so removing it
+    over SSH takes effect at once. It is not a configuration key: stock firmware ignores it, so going back to it turns
+    browser access on again, and a factory reset removes it. Sessions already running stay; the cloud's sessions
+    (`app.jetkvm.com`) do not go through the device's web servers and are not affected.
+- **Why:** the web UI is how other sites reach the device through the user's browser (cross-site requests, DNS
+  rebinding, a malicious extension; see D15). Someone who only uses a native client can take that surface away.
+- **Remove when:** upstream ships an equivalent switch.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -518,7 +635,11 @@ copy files with `ssh ... "cat > file" < file`.
 ## Rollback notes
 
 - **Firmware:** install upstream's `jetkvm_app` the same way (the backup, or the release binary with its `.sha256`
-  and `.sig`). The fork persists nothing of its own (encoder overrides live in memory, no configuration keys are
-  added), so the stock app starts from the same configuration.
+  and `.sig`). The fork adds no configuration keys (encoder overrides live in memory), so the stock app starts from
+  the same configuration; it ignores D16's flag file.
+- **D15:** stock firmware drops these protections again; the session cookie stays valid (the token is unchanged)
+  and the TLS certificates already minted stay in the store.
+- **D16:** stock firmware answers browsers again whatever the flag says. `rm /userdata/jetkvm/browser-access.off`
+  (SSH in developer mode) turns browser access back on without BlitzKVM.
 - **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
   "method not found" from stock firmware; the BlitzKVM app then falls back to the stream quality factor.

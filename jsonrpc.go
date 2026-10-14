@@ -20,6 +20,7 @@ import (
 	"github.com/jetkvm/kvm/internal/logging"
 	"github.com/jetkvm/kvm/internal/native"
 	"github.com/jetkvm/kvm/internal/native/refresh"
+	"github.com/jetkvm/kvm/internal/redact"
 	"github.com/jetkvm/kvm/internal/usbgadget"
 	"github.com/jetkvm/kvm/internal/utils"
 )
@@ -105,8 +106,9 @@ func onRPCMessage(message webrtc.DataChannelMessage, session *Session) {
 	var request JSONRPCRequest
 	err := json.Unmarshal(message.Data, &request)
 	if err != nil {
+		// Not the message itself: it may hold a password (D15).
 		jsonRpcLogger.Warn().
-			Str("data", string(message.Data)).
+			Int("length", len(message.Data)).
 			Err(err).
 			Msg("Error unmarshalling JSONRPC request")
 
@@ -124,7 +126,7 @@ func onRPCMessage(message webrtc.DataChannelMessage, session *Session) {
 
 	scopedLogger := jsonRpcLogger.With().
 		Str("method", request.Method).
-		Interface("params", request.Params).
+		Interface("params", redact.Params(request.Params)). // secrets stay out of the log (D15)
 		Interface("id", request.ID).Logger()
 
 	scopedLogger.Trace().Msg("Received RPC request")
@@ -206,9 +208,10 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // HID-RPC (0x04: vertical, horizontal), in order with pointer reports.
 // "refreshRegions": rpcRefreshRegions and the autoRefresh encoder parameter
 // (D13). "opusAudio": audio in Opus, 48 kHz stereo, for an offer with
-// opus/48000/2, silent frames not sent (D14).
+// opus/48000/2, silent frames not sent (D14). "browserAccess":
+// getBrowserAccessState and setBrowserAccessState (D16).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions", "opusAudio"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
@@ -629,6 +632,8 @@ func rpcSetDevModeState(enabled bool) error {
 			if err := os.Remove(devModeFile); err != nil {
 				return fmt.Errorf("failed to remove devmode file: %w", err)
 			}
+			// A terminal's shell runs only in developer mode (D15).
+			endTerminalShells()
 		} else if os.IsNotExist(err) {
 			logger.Debug().Msg("dev mode already disabled")
 			return nil
@@ -959,6 +964,7 @@ var factoryResetPaths = []string{
 	serialSettingsPath,
 	SerialCommandHistoryPath,
 	failsafeDefaultLastCrashPath,
+	browserAccessOffFile, // D16
 }
 
 func rpcFactoryReset() error {
@@ -1559,6 +1565,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"setVideoEncoderParams":      {Func: rpcSetVideoEncoderParams, Params: []string{"params"}},
 	"requestKeyframe":            {Func: rpcRequestKeyframe},
 	"refreshRegions":             {Func: rpcRefreshRegions, Params: []string{"rects", "qp"}, OptionalParams: []string{"frames"}},
+	"getBrowserAccessState":      {Func: rpcGetBrowserAccessState},
+	"setBrowserAccessState":      {Func: rpcSetBrowserAccessState, Params: []string{"enabled"}},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},
 	"setVideoCodecPreference":    {Func: rpcSetVideoCodecPreference, Params: []string{"codec"}},

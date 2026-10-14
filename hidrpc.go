@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"time"
 
 	"github.com/jetkvm/kvm/internal/hidrpc"
@@ -73,14 +74,20 @@ func handleHidRPCMessage(message hidrpc.Message, session *Session) {
 func onHidMessage(msg hidQueueMessage, session *Session) {
 	data := msg.Data
 
-	scopedLogger := hidRPCLogger.With().
+	// The bytes are keystrokes, pastes included (a pasted password): they
+	// are logged at debug level only, not with the slow-message warning or a
+	// recovered panic (D15).
+	logContext := hidRPCLogger.With().
 		Str("channel", msg.channel).
-		Bytes("data", data).
-		Logger()
+		Int("length", len(data))
+	if hidRPCLogger.GetLevel() <= zerolog.DebugLevel {
+		logContext = logContext.Bytes("data", data)
+	}
+	scopedLogger := logContext.Logger()
 	scopedLogger.Debug().Msg("HID RPC message received")
 
 	if len(data) < 1 {
-		scopedLogger.Warn().Int("length", len(data)).Msg("received empty data in HID RPC message handler")
+		scopedLogger.Warn().Msg("received empty data in HID RPC message handler")
 		return
 	}
 
@@ -96,7 +103,7 @@ func onHidMessage(msg hidQueueMessage, session *Session) {
 	}
 
 	t := time.Now()
-	handleHidRPCMessage(message, session)
+	handleHidRPCMessageRecovering(message, session, scopedLogger)
 	d := time.Since(t)
 
 	if d > 200*time.Millisecond {
@@ -104,6 +111,18 @@ func onHidMessage(msg hidQueueMessage, session *Session) {
 	} else {
 		scopedLogger.Debug().Dur("duration", d).Msg("HID RPC message handled")
 	}
+}
+
+// handleHidRPCMessageRecovering contains a panic while handling one message
+// (D15): the queues run in plain goroutines, so a malformed message would
+// otherwise take the whole app down. The message is dropped and logged.
+func handleHidRPCMessageRecovering(message hidrpc.Message, session *Session, l zerolog.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			l.Error().Interface("panic", r).Bytes("stack", debug.Stack()).Msg("HID RPC message handler panicked, message dropped")
+		}
+	}()
+	handleHidRPCMessage(message, session)
 }
 
 // Tunables

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,8 @@ import (
 	"github.com/jetkvm/kvm/internal/diagnostics"
 	"github.com/jetkvm/kvm/internal/logging"
 	"github.com/jetkvm/kvm/internal/supervisor"
+	"github.com/jetkvm/kvm/internal/sync"
+	"github.com/jetkvm/kvm/internal/webguard"
 	"github.com/pion/webrtc/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -130,6 +133,9 @@ func setupRouter() *gin.Engine {
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Next()
 	})
+
+	r.Use(browserAccessMiddleware())
+	r.Use(browserGuardMiddleware())
 
 	// Add a custom middleware to set cache headers for images
 	// This is crucial for optimizing the initial welcome screen load time
@@ -248,9 +254,12 @@ func handleLocalWebRTCSignal(c *gin.Context) {
 
 	scopedLogger.Info().Msg("new websocket connection established")
 
-	// Create WebSocket options with InsecureSkipVerify to bypass origin check
+	// browserGuardMiddleware has already rejected a handshake from a page of
+	// another origin (D15). The library's own check only compares Origin with
+	// Host, so it would refuse the web UI behind an HTTPS proxy that rewrites
+	// Host, which the browser's Sec-Fetch-Site vouches for.
 	wsOptions := &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // Allow connections from any origin
+		InsecureSkipVerify: true,
 		OnPingReceived: func(ctx context.Context, payload []byte) bool {
 			scopedLogger.Debug().Bytes("payload", payload).Msg("ping frame received")
 
@@ -416,7 +425,8 @@ func handleWebRTCSignalWsMessages(
 			}
 
 			if req.OidcGoogle != "" {
-				l.Info().Str("oidcGoogle", req.OidcGoogle).Msg("new session request with OIDC Google")
+				// The ID token is a bearer credential: never log it (D15).
+				l.Info().Msg("new session request with OIDC Google")
 			}
 
 			metricConnectionSessionRequestCount.WithLabelValues(sourceType, source).Inc()
@@ -462,14 +472,10 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
-	// Check rate limit before processing
-	ip := c.ClientIP()
-	if allowed, retryAfter := passwordRateLimiter.IsAllowed(ip); !allowed {
-		c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error":       "Too many failed attempts. Please try again later.",
-			"retry_after": retryAfter,
-		})
+	// Check rate limit before processing; a locked-out address does not
+	// queue for the password check (D15).
+	if allowed, retryAfter := passwordRateLimiter.IsAllowed(c.ClientIP()); !allowed {
+		abortTooManyAttempts(c, retryAfter)
 		return
 	}
 
@@ -480,15 +486,9 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
-	err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(req.Password))
-	if err != nil {
-		passwordRateLimiter.RecordFailure(ip)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid password"})
+	if !passwordAccepted(c, req.Password, "Invalid password") {
 		return
 	}
-
-	// Clear rate limit on successful login
-	passwordRateLimiter.RecordSuccess(ip)
 
 	config.LocalAuthToken = uuid.New().String()
 
@@ -498,7 +498,7 @@ func handleLogin(c *gin.Context) {
 	}
 
 	// Set the cookie
-	c.SetCookie("authToken", config.LocalAuthToken, authTokenMaxAge, "/", "", false, true)
+	setAuthCookie(c, config.LocalAuthToken, authTokenMaxAge)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Login successful"})
 }
@@ -511,7 +511,7 @@ func handleLogout(c *gin.Context) {
 	}
 
 	// Clear the auth cookie
-	c.SetCookie("authToken", "", -1, "/", "", false, true)
+	setAuthCookie(c, "", -1)
 	c.JSON(http.StatusOK, gin.H{"message": "Logout successful"})
 }
 
@@ -523,7 +523,8 @@ func protectedMiddleware() gin.HandlerFunc {
 		}
 
 		authToken, err := c.Cookie("authToken")
-		if err != nil || authToken != config.LocalAuthToken || authToken == "" {
+		if err != nil || authToken == "" ||
+			subtle.ConstantTimeCompare([]byte(authToken), []byte(config.LocalAuthToken)) != 1 {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
 			return
@@ -531,6 +532,105 @@ func protectedMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// passwordCheckMu runs password checks one at a time (D15). The rate limit
+// checks before and records after the bcrypt comparison, so attempts sent in
+// parallel would all pass it before the first failure is recorded, and their
+// bcrypt runs would saturate the CPU.
+var passwordCheckMu sync.Mutex
+
+// passwordAccepted checks password for the login, the Basic auth of
+// /developer/ and the password changes, under the login's rate limit (D15).
+// It answers c with 429, or 401 and wrongPassword, when the check fails.
+func passwordAccepted(c *gin.Context, password, wrongPassword string) bool {
+	ok, retryAfter := checkPassword(c.ClientIP(), password)
+	switch {
+	case ok:
+		return true
+	case retryAfter > 0:
+		abortTooManyAttempts(c, retryAfter)
+	default:
+		sendErrorJsonThenAbort(c, http.StatusUnauthorized, wrongPassword)
+	}
+	return false
+}
+
+// abortTooManyAttempts answers a request from an address the rate limit
+// locked out.
+func abortTooManyAttempts(c *gin.Context, retryAfter int) {
+	c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+		"error":       "Too many failed attempts. Please try again later.",
+		"retry_after": retryAfter,
+	})
+}
+
+// checkPassword compares password with the stored hash under the per-address
+// rate limit. retryAfter is non-zero, in seconds, when ip is locked out.
+func checkPassword(ip, password string) (ok bool, retryAfter int) {
+	passwordCheckMu.Lock()
+	defer passwordCheckMu.Unlock()
+	if allowed, retry := passwordRateLimiter.IsAllowed(ip); !allowed {
+		return false, retry
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password)); err != nil {
+		passwordRateLimiter.RecordFailure(ip)
+		return false, 0
+	}
+	passwordRateLimiter.RecordSuccess(ip)
+	return true, 0
+}
+
+// setAuthCookie sets the session cookie, or clears it with maxAge -1.
+// SameSite=Strict keeps a browser from sending it with a request another site
+// starts (D15). It is not Secure over HTTPS: the device answers plain HTTP
+// too, and a browser would then refuse the HTTP login's cookie.
+func setAuthCookie(c *gin.Context, token string, maxAge int) {
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie("authToken", token, maxAge, "/", "", false, true)
+}
+
+// browserGuardMiddleware rejects what a web page on another site could send
+// through the user's browser (D15, internal/webguard): a request that can
+// change state, or a WebSocket handshake, from another origin; and, while
+// the device has no password (or none yet), any request addressed to a name
+// public DNS resolves, which is how a DNS rebinding page reaches the device.
+// Rejections are logged at info level: a page can send them in a loop.
+func browserGuardMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		status, err := webguard.Check(c.Request, config.LocalAuthMode == "password", guardHostNames)
+		if status == 0 {
+			c.Next()
+			return
+		}
+		message := "Cross-origin request rejected"
+		if errors.Is(err, webguard.ErrPublicHost) {
+			message = "Without a password this device only answers its IP address, its own host name or a local name " +
+				"(.local, .lan, .home.arpa, Tailscale), to guard against DNS rebinding. " +
+				"Set a password, or open it by one of those."
+		}
+		logger.Info().Err(err).Str("method", c.Request.Method).Str("path", c.Request.URL.Path).
+			Msg("rejected a browser request")
+		sendErrorJsonThenAbort(c, status, message)
+	}
+}
+
+// guardHostNames are the names the device answers to without a password
+// besides IP addresses and local names (D15): its own, and in TLS mode
+// custom those its certificate names, for which the owner vouches.
+func guardHostNames() []string {
+	return append(deviceHostNames(), customCertificateNames()...)
+}
+
+// deviceHostNames are the device's own names: its host name, its FQDN and
+// the host name's mDNS name (D15).
+func deviceHostNames() []string {
+	if networkManager == nil {
+		return nil
+	}
+	hostname := networkManager.Hostname()
+	return []string{hostname, networkManager.FQDN(), hostname + ".local"}
 }
 
 func sendErrorJsonThenAbort(c *gin.Context, status int, message string) {
@@ -566,9 +666,8 @@ func basicAuthProtectedMiddleware(requireDeveloperMode bool) gin.HandlerFunc {
 			return
 		}
 
-		err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password))
-		if err != nil {
-			sendErrorJsonThenAbort(c, http.StatusUnauthorized, "Invalid password")
+		// The login's rate limit covers these password checks too (D15).
+		if !passwordAccepted(c, password, "Invalid password") {
 			return
 		}
 
@@ -669,7 +768,7 @@ func handleCreatePassword(c *gin.Context) {
 	}
 
 	// Set the cookie
-	c.SetCookie("authToken", config.LocalAuthToken, authTokenMaxAge, "/", "", false, true)
+	setAuthCookie(c, config.LocalAuthToken, authTokenMaxAge)
 
 	c.JSON(http.StatusCreated, gin.H{"message": "Password set successfully"})
 }
@@ -704,8 +803,7 @@ func handleUpdatePassword(c *gin.Context) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(req.OldPassword)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Incorrect old password"})
+	if !passwordAccepted(c, req.OldPassword, "Incorrect old password") {
 		return
 	}
 
@@ -723,7 +821,7 @@ func handleUpdatePassword(c *gin.Context) {
 	}
 
 	// Set the cookie
-	c.SetCookie("authToken", config.LocalAuthToken, authTokenMaxAge, "/", "", false, true)
+	setAuthCookie(c, config.LocalAuthToken, authTokenMaxAge)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password updated successfully"})
 }
@@ -745,8 +843,7 @@ func handleDeletePassword(c *gin.Context) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Incorrect password"})
+	if !passwordAccepted(c, req.Password, "Incorrect password") {
 		return
 	}
 
@@ -759,7 +856,7 @@ func handleDeletePassword(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie("authToken", "", -1, "/", "", false, true)
+	setAuthCookie(c, "", -1)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password disabled successfully"})
 }
@@ -857,7 +954,7 @@ func handleSetup(c *gin.Context) {
 		config.LocalAuthToken = uuid.New().String()
 
 		// Set the cookie
-		c.SetCookie("authToken", config.LocalAuthToken, authTokenMaxAge, "/", "", false, true)
+		setAuthCookie(c, config.LocalAuthToken, authTokenMaxAge)
 	} else {
 		// For noPassword mode, ensure the password field is empty
 		config.HashedPassword = ""
@@ -946,6 +1043,12 @@ func handleDiagnosticsDownload(c *gin.Context) {
 		redactedConfig.LocalAuthToken = ""
 		redactedConfig.HashedPassword = ""
 		redactedConfig.GoogleIdentity = ""
+		// A copy: MqttConfig is shared with the running config (D15).
+		if config.MqttConfig != nil {
+			mqttConfig := *config.MqttConfig
+			mqttConfig.Password = ""
+			redactedConfig.MqttConfig = &mqttConfig
+		}
 		if configData, err := json.MarshalIndent(redactedConfig, "", "  "); err == nil {
 			if err := addBytesToZip(zw, "config.json", configData); err != nil {
 				logger.Warn().Err(err).Msg("failed to add config to zip")

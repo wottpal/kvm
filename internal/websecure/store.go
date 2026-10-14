@@ -73,6 +73,7 @@ func (s *CertStore) LoadCertificates() {
 		return
 	}
 
+	// loadCertificate takes certLock itself.
 	for _, file := range files {
 		if file.IsDir() {
 			continue
@@ -204,15 +205,16 @@ func (s *CertStore) ValidateAndSaveCertificate(hostname string, cert string, key
 	}
 
 	s.certLock.Lock()
+	defer s.certLock.Unlock()
 	s.certificates[hostname] = &tlsCert
-	s.certLock.Unlock()
-
-	s.saveCertificate(hostname)
+	s.saveCertificateLocked(hostname)
 
 	return nil, nil
 }
 
-func (s *CertStore) saveCertificate(hostname string) {
+// saveCertificateLocked writes hostname's certificate and key; the caller
+// holds certLock, as TLS handshakes read the map concurrently (D15).
+func (s *CertStore) saveCertificateLocked(hostname string) {
 	// check if certificate already exists
 	tlsCert := s.certificates[hostname]
 	if tlsCert == nil {
