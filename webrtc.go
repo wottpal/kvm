@@ -414,8 +414,9 @@ func getOnHidMessageHandler(session *Session, scopedLogger *zerolog.Logger, chan
 			Str("channel", channel).
 			Int("length", len(msg.Data)).
 			Logger()
-		// only log data if the log level is debug or lower
-		if scopedLogger.GetLevel() > zerolog.DebugLevel {
+		// only log data if the log level is debug or lower (the check was
+		// inverted, which put keystrokes in warnings at the default level, D15)
+		if scopedLogger.GetLevel() <= zerolog.DebugLevel {
 			l = l.With().Str("data", string(msg.Data)).Logger()
 		}
 

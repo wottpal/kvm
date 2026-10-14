@@ -15,11 +15,12 @@
 
 void jetkvm_log(const char *message);
 
-/* Log to screen */
+/* Log to screen. A longer message is truncated, never written past the
+ * buffer: it can carry text from the main app (D15). */
 #define emit_log(level, file, func, line, ...) do {                              \
     /* call the log handler */                                                   \
     char msg_buffer[1024];                                                       \
-    sprintf(msg_buffer, __VA_ARGS__);                                            \
+    snprintf(msg_buffer, sizeof(msg_buffer), __VA_ARGS__);                       \
     log_message(level, file, func, line, msg_buffer);                            \
 } while (0)
 
