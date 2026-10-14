@@ -53,6 +53,18 @@ func initCertStore() {
 	certSigner.LocalNames = deviceHostNames
 }
 
+// customCertificateNames are the DNS names of the user's certificate in TLS
+// mode custom (D15).
+func customCertificateNames() []string {
+	if config.TLSMode != "custom" || certStore == nil {
+		return nil
+	}
+	if cert := certStore.GetCertificate(webSecureCustomCertificateName); cert != nil && cert.Leaf != nil {
+		return cert.Leaf.DNSNames
+	}
+	return nil
+}
+
 func getCertificate(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	switch config.TLSMode {
 	case "self-signed":

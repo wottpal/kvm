@@ -24,8 +24,12 @@ func (hm *ResolvConfManager) SetHostname(hostname, domain string) error {
 		return fmt.Errorf("invalid hostname: %s", hostname)
 	}
 
+	// Under the lock the getters take: the web server reads the names with
+	// every request to a name and every TLS handshake (FORK.md D15).
+	hm.mu.Lock()
 	hm.hostname = hostname
 	hm.domain = domain
+	hm.mu.Unlock()
 
 	return hm.reconcileHostname()
 }

@@ -82,7 +82,7 @@ func TestCrossOrigin(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
-	names := []string{"jetkvm", "jetkvm.fritz.box"}
+	names := func() []string { return []string{"jetkvm", "jetkvm.fritz.box"} }
 	evil := map[string]string{"Origin": "http://evil.example"}
 	tests := []struct {
 		name        string
@@ -113,7 +113,7 @@ func TestCheck(t *testing.T) {
 }
 
 func TestLocalHost(t *testing.T) {
-	names := []string{"kvm-office", "kvm-office.fritz.box"}
+	names := func() []string { return []string{"kvm-office", "kvm-office.fritz.box", "*.kvm.example.org"} }
 	tests := []struct {
 		host string
 		want bool
@@ -135,6 +135,11 @@ func TestLocalHost(t *testing.T) {
 		{"kvm.tail1234.ts.net", true},
 		{"kvm-office.fritz.box", true},
 		{"KVM-Office.Fritz.Box:443", true},
+		// A certificate's wildcard name covers one label.
+		{"office.kvm.example.org", true},
+		{"kvm.example.org", false},
+		{"a.office.kvm.example.org", false},
+		{".kvm.example.org", false},
 		// Names public DNS answers for: what a rebinding page uses.
 		{"rebind.attacker.example", false},
 		{"kvm.example.com", false},
@@ -147,9 +152,28 @@ func TestLocalHost(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.host, func(t *testing.T) {
-			if got := LocalHost(tt.host, names...); got != tt.want {
+			if got := LocalHost(tt.host, names); got != tt.want {
 				t.Fatalf("LocalHost(%q) = %v, want %v", tt.host, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLocalHostLooksUpNamesLast(t *testing.T) {
+	calls := 0
+	names := func() []string { calls++; return []string{"jetkvm"} }
+	for _, host := range []string{"192.168.1.50", "[fd7a:115c:a1e0::1]:443", "jetkvm.local", "kvm.lan"} {
+		if !LocalHost(host, names) {
+			t.Fatalf("LocalHost(%q) = false, want true", host)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("names looked up %d times for addresses and local names, want 0", calls)
+	}
+	if !LocalHost("jetkvm", names) || calls != 1 {
+		t.Fatalf("the device's own name: looked up %d times, want 1", calls)
+	}
+	if LocalHost("jetkvm", nil) {
+		t.Fatal("a single-label name with no names passed")
 	}
 }

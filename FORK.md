@@ -457,6 +457,7 @@ It skips HTML comments and fenced code blocks.
   - `internal/websecure/store.go`
   - `internal/redact/`
   - `internal/webguard/`
+  - `pkg/nmlite/hostname.go`
   - `.github/workflows/fork-checks.yml`
 - **What:** a web page on another site can no longer drive the device through the user's browser, and a client can
   no longer crash the app or fill the device's storage with malformed input.
@@ -471,17 +472,24 @@ It skips HTML comments and fenced code blocks.
     browsers send neither header and pass (curl, the BlitzKVM engine), as do the Vite dev proxy and HTTPS reverse
     proxies that rewrite `Host` (the browser sends `Sec-Fetch-Site: same-origin` there).
   - **DNS rebinding:** while the device has no password (noPassword mode, or not set up yet), it answers only requests
-    addressed to an IP address, to its own host name or FQDN (as mDNS announces them), or to a name under a suffix
-    public DNS does not resolve to an address the page picks: `.local`, `.localhost`, `.home.arpa`, `.alt`, `.test`,
+    addressed to an IP address, to its own host name, FQDN or mDNS name, in TLS mode custom to a name of the uploaded
+    certificate (a wildcard covers one label: its owner vouches for these names), or to a name under a suffix public
+    DNS does not resolve to an address the page picks: `.local`, `.localhost`, `.home.arpa`, `.alt`, `.test`,
     `.invalid`, the undelegated `.lan`, `.home`, `.internal`, `.localdomain`, `.intranet`, `.corp`, `.private`, and
     Tailscale's `.ts.net`. Any other `Host` gets a 403 that says so; a rebinding page uses a public name. Other
-    single-label names are refused, as a resolver may complete them with a search domain. In password mode a rebinding
-    page still reaches what needs no login: the login (whose failures lock out the user's own address),
-    `/device/status` and `/metrics`.
+    single-label names are refused, as a resolver may complete them with a search domain. Native clients are held to
+    the same names: Firefox lets a rebinding page set its own User-Agent, so a request cannot prove it is not a
+    browser. In password mode a rebinding page still reaches what needs no login: the login (whose failures lock out
+    the user's own address), `/device/status` and `/metrics`. The host names are looked up only for a `Host` that is
+    neither an address nor a local name, and the host name setter now takes the lock its getters take. A reverse
+    proxy over plain HTTP must pass the browser's `Host` (nginx: `proxy_set_header Host $host`): browsers send no
+    `Sec-Fetch-Site` there, so with a rewritten `Host` the `Origin` check refuses POSTs and signaling. Rejected
+    requests are logged at info level, as a page can send them in a loop.
   - **Session cookie:** `SameSite=Strict`. Not `Secure` over HTTPS: the device keeps answering plain HTTP, and a
     browser would then refuse the HTTP login's cookie. The token is compared in constant time.
-  - **Password checks** (login and the Basic auth of `/developer/`, which now counts against the login's rate limit)
-    run one at a time: the limit is checked before and recorded after bcrypt, so parallel attempts all passed it.
+  - **Password checks** (login, the Basic auth of `/developer/`, and changing or turning off the password; the last
+    three now count against the login's rate limit) run one at a time: the limit is checked before and recorded after
+    bcrypt, so parallel attempts all passed it.
   - **Secrets out of logs:** the Google ID token of a cloud session request; JSON-RPC parameters, with password,
     passphrase, PSK, secret, token, private-key and OIDC values and the credentials in URLs masked
     (`internal/redact`; they reached the app log with every failing call, e.g. the MQTT password or the TLS private
@@ -493,8 +501,9 @@ It skips HTML comments and fenced code blocks.
   - **Self-signed TLS** (`internal/websecure`): a certificate is minted per TLS server name a client sends, before
     any authentication. Handshakes read the store's map while another wrote it (a fatal concurrent map access: a few
     parallel handshakes with new names ended the app) and could mint two CAs; the store's lock now covers it. After 32
-    names a client chose, a new one gets the default domain's certificate instead of a new one on disk; the address
-    the connection reached and the device's own host name and FQDN are always minted.
+    certificates, a new name a client chose gets the default domain's certificate instead of a new one on disk; the
+    default domain, the address the connection reached and the device's own host name, FQDN and mDNS name are always
+    minted.
   - **HID-RPC:** the keypress, keyboard, mouse, macro and macro-state reports check their length (a short one
     panicked, and a panic in a HID queue ends the app); the macro's length check is computed in 64 bits: with the
     device's 32-bit `int`, a step count of 954437177 passed it for a one-byte body and the parser panicked

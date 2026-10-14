@@ -17,10 +17,11 @@ import (
 )
 
 // Check decides whether the device answers r. passwordSet tells whether a
-// password guards the device; names are its own host name and FQDN. It
-// returns 0 to let r pass, or the status to reject it with and why.
-func Check(r *http.Request, passwordSet bool, names []string) (int, error) {
-	if !passwordSet && !LocalHost(r.Host, names...) {
+// password guards the device; names returns the other names it answers to
+// (see LocalHost). It returns 0 to let r pass, or the status to reject it
+// with and why.
+func Check(r *http.Request, passwordSet bool, names func() []string) (int, error) {
+	if !passwordSet && !LocalHost(r.Host, names) {
 		return http.StatusForbidden, fmt.Errorf("%w: %q", ErrPublicHost, r.Host)
 	}
 	if NeedsOriginCheck(r) {
@@ -102,12 +103,14 @@ var privateSuffixes = []string{
 
 // LocalHost reports whether host (a Host header, with or without a port)
 // names the device in a way a DNS rebinding attack cannot produce: an IP
-// address, a name under a private suffix, or one of names (the device's own
-// host name and FQDN, which may be single-label or under a router's domain).
-// Other single-label names are refused: a resolver may complete them with a
-// search domain whose records others can write. An empty host (HTTP/1.0,
-// never a browser) passes.
-func LocalHost(host string, names ...string) bool {
+// address, a name under a private suffix, or one of names: the device's own
+// (single-label or under a router's domain) and those of a certificate its
+// owner installed, where "*.example.com" stands for one label under
+// example.com. names is called only for a host that is neither an IP address
+// nor under a private suffix. Other single-label names are refused: a
+// resolver may complete them with a search domain whose records others can
+// write. An empty host (HTTP/1.0, never a browser) passes.
+func LocalHost(host string, names func() []string) bool {
 	if host == "" {
 		return true
 	}
@@ -127,10 +130,23 @@ func LocalHost(host string, names ...string) bool {
 			return true
 		}
 	}
-	for _, name := range names {
-		if name = strings.TrimSuffix(strings.ToLower(name), "."); name != "" && host == name {
+	if names == nil {
+		return false
+	}
+	for _, name := range names() {
+		if matchName(host, strings.TrimSuffix(strings.ToLower(name), ".")) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchName reports whether host is name or, for a wildcard name, one label
+// under its domain.
+func matchName(host, name string) bool {
+	if domain, ok := strings.CutPrefix(name, "*."); ok {
+		label, rest, found := strings.Cut(host, ".")
+		return found && label != "" && rest == domain
+	}
+	return name != "" && host == name
 }

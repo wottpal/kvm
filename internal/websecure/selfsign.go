@@ -80,7 +80,7 @@ func (s *SelfSigner) createSelfSignedCertLocked(hostname string, capped bool) *t
 	// check if hostname is the CA magic name
 	var ca *tls.Certificate
 	if hostname != selfSignerCAMagicName {
-		if capped && hostname != s.DefaultDomain && !s.isLocalName(hostname) && s.mintedHostsLocked() >= maxSelfSignedHosts {
+		if capped && hostname != s.DefaultDomain && s.mintedHostsLocked() >= maxSelfSignedHosts && !s.isLocalName(hostname) {
 			if !s.capWarned {
 				s.capWarned = true
 				s.log.Warn().Int("max", maxSelfSignedHosts).Str("hostname", hostname).

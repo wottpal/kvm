@@ -254,8 +254,9 @@ func handleLocalWebRTCSignal(c *gin.Context) {
 	scopedLogger.Info().Msg("new websocket connection established")
 
 	// browserGuardMiddleware has already rejected a handshake from a page of
-	// another origin (D15); the library's own check would also refuse an
-	// app's web view, so it stays off.
+	// another origin (D15). The library's own check only compares Origin with
+	// Host, so it would refuse the web UI behind an HTTPS proxy that rewrites
+	// Host, which the browser's Sec-Fetch-Site vouches for.
 	wsOptions := &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 		OnPingReceived: func(ctx context.Context, payload []byte) bool {
@@ -470,14 +471,10 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
-	// Check rate limit before processing
-	ip := c.ClientIP()
-	if allowed, retryAfter := passwordRateLimiter.IsAllowed(ip); !allowed {
-		c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error":       "Too many failed attempts. Please try again later.",
-			"retry_after": retryAfter,
-		})
+	// Check rate limit before processing; a locked-out address does not
+	// queue for the password check (D15).
+	if allowed, retryAfter := passwordRateLimiter.IsAllowed(c.ClientIP()); !allowed {
+		abortTooManyAttempts(c, retryAfter)
 		return
 	}
 
@@ -488,16 +485,7 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
-	if ok, retryAfter := checkPassword(ip, req.Password); !ok {
-		if retryAfter > 0 {
-			c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Too many failed attempts. Please try again later.",
-				"retry_after": retryAfter,
-			})
-			return
-		}
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid password"})
+	if !passwordAccepted(c, req.Password, "Invalid password") {
 		return
 	}
 
@@ -551,6 +539,32 @@ func protectedMiddleware() gin.HandlerFunc {
 // bcrypt runs would saturate the CPU.
 var passwordCheckMu sync.Mutex
 
+// passwordAccepted checks password for the login, the Basic auth of
+// /developer/ and the password changes, under the login's rate limit (D15).
+// It answers c with 429, or 401 and wrongPassword, when the check fails.
+func passwordAccepted(c *gin.Context, password, wrongPassword string) bool {
+	ok, retryAfter := checkPassword(c.ClientIP(), password)
+	switch {
+	case ok:
+		return true
+	case retryAfter > 0:
+		abortTooManyAttempts(c, retryAfter)
+	default:
+		sendErrorJsonThenAbort(c, http.StatusUnauthorized, wrongPassword)
+	}
+	return false
+}
+
+// abortTooManyAttempts answers a request from an address the rate limit
+// locked out.
+func abortTooManyAttempts(c *gin.Context, retryAfter int) {
+	c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+		"error":       "Too many failed attempts. Please try again later.",
+		"retry_after": retryAfter,
+	})
+}
+
 // checkPassword compares password with the stored hash under the per-address
 // rate limit. retryAfter is non-zero, in seconds, when ip is locked out.
 func checkPassword(ip, password string) (ok bool, retryAfter int) {
@@ -581,9 +595,10 @@ func setAuthCookie(c *gin.Context, token string, maxAge int) {
 // change state, or a WebSocket handshake, from another origin; and, while
 // the device has no password (or none yet), any request addressed to a name
 // public DNS resolves, which is how a DNS rebinding page reaches the device.
+// Rejections are logged at info level: a page can send them in a loop.
 func browserGuardMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		status, err := webguard.Check(c.Request, config.LocalAuthMode == "password", deviceHostNames())
+		status, err := webguard.Check(c.Request, config.LocalAuthMode == "password", guardHostNames)
 		if status == 0 {
 			c.Next()
 			return
@@ -594,19 +609,27 @@ func browserGuardMiddleware() gin.HandlerFunc {
 				"(.local, .lan, .home.arpa, Tailscale), to guard against DNS rebinding. " +
 				"Set a password, or open it by one of those."
 		}
-		logger.Warn().Err(err).Str("method", c.Request.Method).Str("path", c.Request.URL.Path).
+		logger.Info().Err(err).Str("method", c.Request.Method).Str("path", c.Request.URL.Path).
 			Msg("rejected a browser request")
 		sendErrorJsonThenAbort(c, status, message)
 	}
 }
 
-// deviceHostNames are the names the device answers to besides IP addresses
-// and local names: its host name and FQDN, as mDNS announces them.
+// guardHostNames are the names the device answers to without a password
+// besides IP addresses and local names (D15): its own, and in TLS mode
+// custom those its certificate names, for which the owner vouches.
+func guardHostNames() []string {
+	return append(deviceHostNames(), customCertificateNames()...)
+}
+
+// deviceHostNames are the device's own names: its host name, its FQDN and
+// the host name's mDNS name (D15).
 func deviceHostNames() []string {
 	if networkManager == nil {
 		return nil
 	}
-	return []string{networkManager.Hostname(), networkManager.FQDN()}
+	hostname := networkManager.Hostname()
+	return []string{hostname, networkManager.FQDN(), hostname + ".local"}
 }
 
 func sendErrorJsonThenAbort(c *gin.Context, status int, message string) {
@@ -643,13 +666,7 @@ func basicAuthProtectedMiddleware(requireDeveloperMode bool) gin.HandlerFunc {
 		}
 
 		// The login's rate limit covers these password checks too (D15).
-		if ok, retryAfter := checkPassword(c.ClientIP(), password); !ok {
-			if retryAfter > 0 {
-				c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
-				sendErrorJsonThenAbort(c, http.StatusTooManyRequests, "Too many failed attempts. Please try again later.")
-				return
-			}
-			sendErrorJsonThenAbort(c, http.StatusUnauthorized, "Invalid password")
+		if !passwordAccepted(c, password, "Invalid password") {
 			return
 		}
 
@@ -785,8 +802,7 @@ func handleUpdatePassword(c *gin.Context) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(req.OldPassword)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Incorrect old password"})
+	if !passwordAccepted(c, req.OldPassword, "Incorrect old password") {
 		return
 	}
 
@@ -826,8 +842,7 @@ func handleDeletePassword(c *gin.Context) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Incorrect password"})
+	if !passwordAccepted(c, req.Password, "Incorrect password") {
 		return
 	}
 

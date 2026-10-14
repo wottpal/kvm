@@ -139,10 +139,6 @@ func handleTerminalChannel(d *webrtc.DataChannel) {
 	d.OnOpen(func() {
 		mu.Lock()
 		defer mu.Unlock()
-		if !devModeEnabled() {
-			scopedLogger.Info().Msg("terminal channel open, its shell waits for developer mode")
-			return
-		}
 		startShellLocked()
 	})
 

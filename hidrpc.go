@@ -87,7 +87,7 @@ func onHidMessage(msg hidQueueMessage, session *Session) {
 	scopedLogger.Debug().Msg("HID RPC message received")
 
 	if len(data) < 1 {
-		scopedLogger.Warn().Int("length", len(data)).Msg("received empty data in HID RPC message handler")
+		scopedLogger.Warn().Msg("received empty data in HID RPC message handler")
 		return
 	}
 
