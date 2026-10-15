@@ -66,6 +66,7 @@ func Main() {
 	// initialize usb gadget
 	setProcTitle("initUsbGadget")
 	initUsbGadget()
+	go superviseHostLink()
 
 	setProcTitle("initNative")
 	initNative(systemVersionLocal, appVersionLocal)

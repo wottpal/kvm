@@ -65,6 +65,8 @@ var defaultGadgetConfig = map[string]gadgetConfigItem{
 	"mass_storage_lun0": massStorageLun0Config,
 	// serial console (CDC-ACM)
 	"serial_console": serialConsoleConfig,
+	// host link (CDC-NCM, FORK.md D17)
+	"network": networkConfig,
 }
 
 func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
@@ -83,6 +85,8 @@ func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 		return u.enabledDevices.SerialConsole
 	case "audio":
 		return u.enabledDevices.Audio
+	case "network":
+		return u.enabledDevices.Network
 	default:
 		return true
 	}

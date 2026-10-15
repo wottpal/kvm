@@ -36,4 +36,4 @@ jobs:
         env:
           GOARCH: "386"
           CGO_ENABLED: "0"
-        run: go test ./internal/hidrpc/ ./internal/webguard/ ./internal/redact/ ./internal/websecure/ ./internal/native/refresh/
+        run: go test ./internal/hidrpc/ ./internal/webguard/ ./internal/redact/ ./internal/websecure/ ./internal/native/refresh/ ./internal/hostlink/

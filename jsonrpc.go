@@ -211,7 +211,7 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // opus/48000/2, silent frames not sent (D14). "browserAccess":
 // getBrowserAccessState and setBrowserAccessState (D16).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
@@ -1567,6 +1567,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"refreshRegions":             {Func: rpcRefreshRegions, Params: []string{"rects", "qp"}, OptionalParams: []string{"frames"}},
 	"getBrowserAccessState":      {Func: rpcGetBrowserAccessState},
 	"setBrowserAccessState":      {Func: rpcSetBrowserAccessState, Params: []string{"enabled"}},
+	"getHostLinkState":           {Func: rpcGetHostLinkState, OptionalParams: []string{"probe"}},
+	"setHostLinkState":           {Func: rpcSetHostLinkState, Params: []string{"enabled"}},
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},
 	"setVideoCodecPreference":    {Func: rpcSetVideoCodecPreference, Params: []string{"codec"}},

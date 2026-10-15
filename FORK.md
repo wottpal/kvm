@@ -550,6 +550,57 @@ It skips HTML comments and fenced code blocks.
   rebinding, a malicious extension; see D15). Someone who only uses a native client can take that surface away.
 - **Remove when:** upstream ships an equivalent switch.
 
+### D17 — Host link
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `host_link.go`
+  - `internal/hostlink/`
+  - `internal/usbgadget/network.go`
+  - `internal/usbgadget/config.go`
+  - `internal/usbgadget/usbgadget.go`
+  - `usb.go`
+  - `jsonrpc.go`
+  - `webrtc.go`
+  - `main.go`
+  - `go.mod`
+  - `go.sum`
+  - `.github/workflows/fork-checks.yml`
+- **What:** an opt-in USB network link to the computer that a client uses to reach the computer's SSH server; BlitzKVM
+  syncs a Mac's clipboard over it with nothing installed on the Mac but a key (Remote Login on).
+  - **Gadget:** a CDC-NCM function (`ncm.usb0`, after the existing functions), which macOS, Windows and Linux drive
+    with their own drivers. Every JetKVM uses the same locally administered MACs, `02:4a:4b:00:00:01` (device) and
+    `02:4a:4b:00:00:02` (computer): each link is point-to-point, and the computer keeps a stable source address to
+    restrict a key to (`from="fe80::4a:4bff:fe00:1%*"`).
+  - **Isolation:** the kernel never configures an address on the interface: its IPv6 is off there, and its IPv4
+    answers no ARP (`IFF_NOARP`, `arp_ignore=8`) and accepts no packet (`rp_filter=1`: with no address or route on
+    the interface, every packet fails the check). None of the device's services (web servers, SSH, mDNS) is
+    reachable from the computer. `internal/hostlink` runs its own IPv6 and TCP stack (gVisor's netstack, pinned to
+    `20250205023644-9414b50a5633`, the last one whose module builds with Go 1.25) on the interface's frames through a
+    packet socket. It only dials out, and listens on one port for the computer's report (below). gVisor's `fdbased`
+    link endpoint fails every multi-buffer packet with `EMSGSIZE` on 32-bit ARM, so the frames go through a channel
+    endpoint instead.
+  - **Discovery:** the computer's link-local address comes from a ping to all nodes and an mDNS query (answered even
+    with the macOS firewall's stealth mode on); duplicate address detection is off.
+  - **API:** JSON-RPC `getHostLinkState` (`{"probe": bool}`: with probe it also tries the SSH server) returns
+    `enabled`, `running`, `deviceAddress`, `hostAddress`, `ssh`, `report` and `error`; `setHostLinkState`
+    (`{"enabled": bool}`) re-enumerates the computer's USB devices once. Listed as `hostLink` by
+    `getFirmwareFeatures`.
+  - **SSH channel:** a data channel labelled `hostlink-ssh` carries the TCP stream to the computer's port 22, with
+    backpressure both ways; it closes within seconds when the computer can't be reached. The client speaks SSH end
+    to end, so the device never sees the key or the clipboard.
+  - **Report:** port 4022 on the device takes `user=` and `name=` lines (1 KiB at most, one connection at a time)
+    from the installer a client types on the computer, so the client learns the account name to log in as. The
+    device keeps the last report in memory and doesn't log its contents.
+  - **State:** the flag file `/userdata/jetkvm/host-link.on`; a supervisor starts, restarts (on a recreated
+    interface, or when the packet socket fails) and stops the stack every 5 s to match it. A gadget change that fails
+    puts the flag back. `Devices.Network` follows the flag and is never saved.
+- **Why:** a KVM sees the computer's screen and types on it, but can't copy text off it. With the link, a client
+  reaches the computer's own SSH server even when the computer is on no network the client can reach.
+- **Remove when:** never (fork-only).
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -642,5 +693,8 @@ copy files with `ssh ... "cat > file" < file`.
   and the TLS certificates already minted stay in the store.
 - **D16:** stock firmware answers browsers again whatever the flag says. `rm /userdata/jetkvm/browser-access.off`
   (SSH in developer mode) turns browser access back on without BlitzKVM.
+- **D17:** stock firmware drops the USB network function whatever the flag says (the computer re-enumerates once).
+  Keys a client installed stay in the computer's `~/.ssh/authorized_keys` until the client removes them; they only
+  accept connections from the link's address.
 - **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
   "method not found" from stock firmware; the BlitzKVM app then falls back to the stream quality factor.

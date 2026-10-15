@@ -23,6 +23,9 @@ type Devices struct {
 	MassStorage   bool `json:"mass_storage"`
 	SerialConsole bool `json:"serial_console"`
 	Audio         bool `json:"audio"`
+	// Network is the host link (FORK.md D17). Not part of the saved
+	// configuration: a flag file outside it turns the link on.
+	Network bool `json:"-"`
 }
 
 // Config is a struct that represents the customizations for a USB gadget.

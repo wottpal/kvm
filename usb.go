@@ -16,6 +16,7 @@ func effectiveUsbDevices() *usbgadget.Devices {
 	}
 
 	devices := *config.UsbDevices
+	devices.Network = hostLinkEnabled() // FORK.md D17
 	return &devices
 }
 
