@@ -43,10 +43,11 @@ const (
 	// on the computer sends its user name here.
 	ReportPort = 4022
 
-	nicID     tcpip.NICID = 1
-	reportMax             = 1024
-	mdnsPort              = 5353
+	reportMax = 1024
+	mdnsPort  = 5353
 )
+
+const nicID tcpip.NICID = 1
 
 // ErrNoHost means no computer answered on the link.
 var ErrNoHost = errors.New("no computer answers on the USB link")
