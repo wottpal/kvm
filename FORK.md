@@ -71,7 +71,7 @@ It skips HTML comments and fenced code blocks.
   listed path must still differ, a directory entry may only name a directory the fork adds, and every workflow file
   must be in the workflow inventory. Run it locally with `python3 scripts/fork/audit_divergence.py` after
   `git fetch upstream dev` (`--staged` audits the index before committing). Since D15 the workflow also runs the fork's
-  plain Go tests on linux/386.
+  plain Go tests on linux/386. `scripts/fork/install_guard.sh` is the boot guard for remote installs (see Procedures).
 - **Remove when:** never (fork-only).
 
 ### D03 — Color signaling matches the HDMI bridge
@@ -190,9 +190,9 @@ It skips HTML comments and fenced code blocks.
     result as a whole (an invalid one changes nothing) and returns the new status. Fields: `minQp` (8–40), `maxQp`
     (`minQp`–51), `gopSeconds`, `aq`, `maxFps` (0 = source rate, up to 120), `bitrateKbps` and `maxBitrateKbps`
     (100–50,000; 0 = derived from the quality factor, max 1.5× the target).
-  - Bitrate, QP and AQ apply to the running channel without a keyframe; frame rate and GOP apply live and cost one
-    keyframe. If a live change fails, the stream restarts the way a quality-factor change does (capture and encoder
-    only; EDID and HDMI hot-plug are untouched).
+  - Bitrate, QP and AQ apply to the running channel without a keyframe; frame rate and GOP apply live, and a GOP
+    change costs one keyframe (a frame rate change did too, until D18). If a live change fails, the stream restarts
+    the way a quality-factor change does (capture and encoder only; EDID and HDMI hot-plug are untouched).
   - `maxFps` drops captured frames evenly before the encoder (`JETKVM_VENC_MAX_FPS`, 0–120, sets its default).
     Rate control keeps the frame rate the channel was created with, and the bitrates are scaled to it: changing it
     live made rockit reprogram the encoder's input stride in pixels instead of bytes (packed YUV 4:2:2), and the
@@ -601,6 +601,61 @@ It skips HTML comments and fenced code blocks.
   reaches the computer's own SSH server even when the computer is on no network the client can reach.
 - **Remove when:** never (fork-only).
 
+### D18 — Frame pacing, and frame rate changes without a keyframe
+
+- **Since:** 2026-10-18
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `jsonrpc.go`
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/cgo/video.c`
+  - `internal/native/cgo_linux.go`
+  - `internal/native/encoder_params.go`
+  - `internal/native/encoder_params_test.go`
+  - `internal/native/proto/native.proto`
+  - `internal/native/proto/native.pb.go`
+  - `internal/native/proto/native_grpc.pb.go`
+- **What:**
+  - **Pacing:** `paceKbps` (0 = off, the default; else 100–50,000) joins D06's parameters. Each encoded frame's bytes
+    go into a bucket that drains at that rate; while it holds more than 40 ms of it, the capture loop leaves the next
+    due frame out, before the encoder, so no reference is lost and the next frame carries the change. A frame left out
+    spends its `maxFps` turn, so no burst follows. Small frames (a key's echo, the pointer) go out at the full rate; a
+    run of large ones (scrolling, a keyframe, a still refresh) thins out to the rate instead of queueing in the send
+    path, where every frame behind it waited as long and arrived stale.
+  - **GOP:** counted in the channel's frames (its rate control's frame rate, fixed per channel) instead of the encoded
+    ones. A GOP length change makes MPP send an IDR, so every `maxFps` change used to cost a keyframe, and the still
+    refresh half a second later; now only a `gopSeconds` change does. At a lower `maxFps` the GOP lasts longer in
+    seconds (60 s at 30 of 60 fps: 120 s); clients ask for keyframes when they need one.
+  - Listed as `framePacing` by `getFirmwareFeatures`.
+- **Why:** over a slow link, or Tailscale on the device, a burst of large frames held every frame behind it, and the
+  BlitzKVM app's quality changes (frame rate steps) sent keyframes into links that were already congested. Measured
+  on the maintainer's device: four `maxFps` changes on a still screen sent four keyframe pairs before, none after.
+- **Remove when:** upstream paces frames by a byte budget and keeps the GOP across frame rate changes.
+
+### D19 — STUN servers from a local client
+
+- **Since:** 2026-10-18
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `webrtc.go`
+  - `jsonrpc.go`
+  - `stun_servers.go`
+  - `stun_servers_test.go`
+  - `go.mod`
+- **What:** a session request on the device's own signaling socket may name STUN servers in `iceServers`, as the
+  cloud's requests do: up to 4 `stun:` URLs that pion parses (one it rejected would fail the session), 256 bytes each
+  at most. Anything else is ignored: TURN (it relays, and takes credentials), and `stuns:`, which this pion doesn't
+  gather over TLS. The device then also offers its public address
+  (server-reflexive candidates). Listed as `stunServers` by `getFirmwareFeatures`. A request that names none gets
+  what upstream gives a local session: no STUN servers.
+- **Why:** with Tailscale on the device, the device's single core encrypts every packet of a session over the
+  tailnet (about 1.1 ms of CPU each), which caps the picture near 2.5 Mbit/s, and Tailscale may relay it through
+  DERP besides. When BlitzKVM reaches the device that way, it names public STUN servers so ICE can find a direct UDP
+  path; the session stays on the tunnel where none works.
+- **Remove when:** upstream lets local clients name STUN servers.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -674,6 +729,13 @@ copy files with `ssh ... "cat > file" < file`.
   the copy runs.
 - **Install:** back up `/userdata/jetkvm/bin/jetkvm_app`, copy the build to `/userdata/jetkvm/jetkvm_app.update`,
   check its SHA-256, `sync` and reboot. At boot the device moves the update into place, as an OTA update does.
+- **Install remotely** (a device you reach only over the network, such as Tailscale): also copy
+  `scripts/fork/install_guard.sh` to `/userdata/init.d/S99install-guard` and `chmod +x` it (the boot scripts run
+  only executables there), copy the running build to `/userdata/jetkvm/jetkvm_app.known-good`, and write `0` to
+  `/userdata/install-guard.armed` before the reboot. If the new app doesn't answer `/device/status` within 2.5–4
+  minutes of a boot and again 5 minutes later, or the device boots 3 times without that (a crash loop), the guard
+  puts the known-good build back and reboots. Run `reboot` in the SSH session's foreground: a backgrounded one dies
+  with the session. Delete the marker once the new build has proven itself.
 
 ### Sync with upstream
 
@@ -697,5 +759,10 @@ copy files with `ssh ... "cat > file" < file`.
 - **D17:** stock firmware drops the USB network function whatever the flag says (the computer re-enumerates once).
   Keys a client installed stay in the computer's `~/.ssh/authorized_keys` until the client removes them; they only
   accept connections from the link's address.
+- **D18:** earlier fork builds ignore `paceKbps` (unknown parameters are ignored), and a frame rate change costs a
+  keyframe there again; stock firmware has no `setVideoEncoderParams` at all (D06). BlitzKVM sends `paceKbps` only
+  where `getFirmwareFeatures` lists `framePacing`.
+- **D19:** stock firmware ignores `iceServers` on local sessions, so away from home BlitzKVM mostly stays on the
+  tunnel (a window waits 1.5 s for a direct path first, then not again on that network for 30 minutes).
 - **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
   "method not found" from stock firmware; the BlitzKVM app then falls back to the stream quality factor.
