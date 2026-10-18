@@ -1,3 +1,5 @@
+//go:build linux && arm
+
 package native
 
 import "testing"
