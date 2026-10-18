@@ -375,6 +375,7 @@ static void configure_vui_video_signal(VENC_VUI_VIDEO_SIGNAL_S *video_signal)
         .max_bitrate_kbps = 0,        \
         .still_qp = 8,                \
         .auto_refresh = true,         \
+        .pace_kbps = 0,               \
     }
 static jetkvm_venc_params_t venc_params = VENC_PARAMS_COMPILED_DEFAULTS;
 // Compiled defaults with env overrides applied (venc_params_load_env).
@@ -445,7 +446,8 @@ static bool venc_params_valid(const jetkvm_venc_params_t *p)
            p->max_fps >= 0 && p->max_fps <= 120 &&
            (p->bitrate_kbps == 0 || (p->bitrate_kbps >= 100 && p->bitrate_kbps <= 50000)) &&
            (p->max_bitrate_kbps == 0 || (p->max_bitrate_kbps >= 100 && p->max_bitrate_kbps <= 50000)) &&
-           (p->bitrate_kbps == 0 || p->max_bitrate_kbps == 0 || p->max_bitrate_kbps >= p->bitrate_kbps);
+           (p->bitrate_kbps == 0 || p->max_bitrate_kbps == 0 || p->max_bitrate_kbps >= p->bitrate_kbps) &&
+           (p->pace_kbps == 0 || (p->pace_kbps >= 100 && p->pace_kbps <= 50000));
 }
 
 // Frames per second actually encoded: the source rate, capped by max_fps.
@@ -704,12 +706,72 @@ static struct
     RK_U32 height;
     RK_U32 source_fps;
     volatile RK_U32 encode_fps; // also read lock-free by the capture loop
+    volatile RK_U32 pace_kbps;  // frame pacing (D18), also read lock-free by the capture loop
     RK_U32 rc_fps;    // rate control's frame rate, fixed per channel (venc_set_rc_attr_live)
     RK_U32 gop;       // nominal GOP length
     RK_U32 gop_nudge; // 0/1 frame added by the keyframe GOP-nudge fallback
     RK_U32 bitrate;
     RK_U32 max_bitrate;
 } venc_live;
+
+// Frame pacing (D18). Each encoded frame's bytes go into a bucket that drains
+// at pace_kbps; while it holds more than PACE_WINDOW_US of that rate, the
+// capture loop leaves the next captured frame out, before the encoder, so no
+// reference is lost. Frames smaller than their share go out at the full rate
+// (a key's echo, the pointer); a run of large ones (scrolling, a window
+// switch) thins out instead of queueing in the send path behind them, where
+// every frame waited as long and arrived stale. A keyframe drains through
+// the bucket like any frame: the frames after it are left out until the link
+// had the time to carry it. 0 = off: frames are dropped only by max_fps.
+#define PACE_WINDOW_US 40000
+static pthread_mutex_t pace_mutex = PTHREAD_MUTEX_INITIALIZER;
+static double pace_bytes; // in the bucket at pace_at_us
+static RK_U64 pace_at_us;
+
+// Both threads read the clock before they take pace_mutex, so a call may
+// come with an older time than the last: it drains nothing.
+static void pace_drain_locked(RK_U64 now_us, RK_U32 kbps)
+{
+    if (now_us <= pace_at_us)
+        return;
+    pace_bytes -= (double)(now_us - pace_at_us) * kbps / 8000.0;
+    if (pace_bytes < 0)
+        pace_bytes = 0;
+    pace_at_us = now_us;
+}
+
+static void pace_reset(void)
+{
+    pthread_mutex_lock(&pace_mutex);
+    pace_bytes = 0;
+    pace_at_us = 0;
+    pthread_mutex_unlock(&pace_mutex);
+}
+
+// An encoded frame of len bytes left the encoder at now_us.
+static void pace_note(RK_U64 now_us, size_t len)
+{
+    const RK_U32 kbps = venc_live.pace_kbps;
+    if (kbps == 0)
+        return;
+    pthread_mutex_lock(&pace_mutex);
+    pace_drain_locked(now_us, kbps);
+    pace_bytes += (double)len;
+    pthread_mutex_unlock(&pace_mutex);
+}
+
+// Whether a frame captured now may go to the encoder.
+static bool pace_allows(RK_U64 now_us)
+{
+    const RK_U32 kbps = venc_live.pace_kbps;
+    if (kbps == 0)
+        return true;
+    pthread_mutex_lock(&pace_mutex);
+    pace_drain_locked(now_us, kbps);
+    const bool ok = pace_bytes <= (double)PACE_WINDOW_US * kbps / 8000.0;
+    pthread_mutex_unlock(&pace_mutex);
+    return ok;
+}
 
 // Still-screen refresh. Encoded frames tell whether the screen changes: a
 // still screen gives nearly empty P-frames. After any change, once the
@@ -1040,6 +1102,8 @@ static int32_t venc_start(RK_U32 width, RK_U32 height, RK_U32 source_fps)
     venc_live.height = height;
     venc_live.source_fps = source_fps;
     venc_live.encode_fps = venc_encode_fps(source_fps, params.max_fps);
+    venc_live.pace_kbps = params.pace_kbps;
+    pace_reset();
     venc_live.rc_fps = venc_live.encode_fps;
     venc_live.gop = venc_gop_frames(venc_live.encode_fps, params.gop_seconds);
     venc_live.gop_nudge = 0;
@@ -1127,7 +1191,10 @@ static bool venc_set_rc_attr_live(VENC_CHN_ATTR_S *stAttr, RK_U32 bitrate, RK_U3
 static bool venc_apply_live_locked(const jetkvm_venc_params_t *p)
 {
     const RK_U32 encode_fps = venc_encode_fps(venc_live.source_fps, p->max_fps);
-    const RK_U32 gop = venc_gop_frames(encode_fps, p->gop_seconds);
+    // The GOP counts the channel's frames (its rate control's rate), not the
+    // encoded ones: a GOP length change makes MPP send an IDR, so counting
+    // encoded frames cost a keyframe on every frame rate change (D18).
+    const RK_U32 gop = venc_gop_frames(venc_live.rc_fps, p->gop_seconds);
     RK_U32 bitrate, max_bitrate;
     venc_bitrates(p, venc_live.width, venc_live.height, &bitrate, &max_bitrate);
 
@@ -1167,8 +1234,9 @@ static bool venc_apply_live_locked(const jetkvm_venc_params_t *p)
     }
 
     venc_live.params = *p;
-    log_notice("applied VENC params live: gop %u frames (%.1f s at %u of %u fps), bitrate %u kbps (max %u)",
-               gop, p->gop_seconds, encode_fps, venc_live.source_fps, bitrate, max_bitrate);
+    venc_live.pace_kbps = p->pace_kbps;
+    log_notice("applied VENC params live: gop %u frames (%.1f s at %u fps), %u of %u fps, bitrate %u kbps (max %u), pace %d kbps",
+               gop, p->gop_seconds, venc_live.rc_fps, encode_fps, venc_live.source_fps, bitrate, max_bitrate, p->pace_kbps);
     return true;
 }
 
@@ -1615,6 +1683,7 @@ static void *venc_read_stream(void *arg)
             const size_t len = stFrame.pstPack->u32Len;
             const bool idr = venc_count_output(pData, len);
             enc_note_output(nowUs, idr);
+            pace_note(nowUs, len);
             video_send_frame(pData, (ssize_t)len);
             if (tm_on())
             {
@@ -1935,14 +2004,19 @@ void *run_video_stream(void *arg)
                 // Drop frames evenly to encode encode_fps of fps. Done here
                 // rather than via the VENC dst frame rate, whose drop
                 // behaviour rockit does not document. encode_fps can change
-                // live; rate control then keeps its frame rate.
+                // live; rate control then keeps its frame rate. A frame due
+                // that pacing leaves out spends its turn too, so no burst
+                // follows the pause (D18).
                 frame_credit += venc_live.encode_fps;
                 if (frame_credit >= fps)
                 {
                     frame_credit -= fps;
-                    MB_BLK blk = RK_MPI_MMZ_Fd2Handle(tmp_plane.m.fd);
-                    assert(blk != RK_NULL);
-                    venc_submit(&stFrame, blk, num++, ts_us);
+                    if (pace_allows(dq_us))
+                    {
+                        MB_BLK blk = RK_MPI_MMZ_Fd2Handle(tmp_plane.m.fd);
+                        assert(blk != RK_NULL);
+                        venc_submit(&stFrame, blk, num++, ts_us);
+                    }
                 }
             }
             if (ioctl(video_dev_fd, VIDIOC_QBUF, &buf) < 0)
@@ -1956,8 +2030,11 @@ void *run_video_stream(void *arg)
                 if (frame_credit >= fps)
                 {
                     frame_credit -= fps;
-                    sleep_until_us(next_start_us + offset_us);
-                    venc_submit(&stFrame, buffers[next].mb_blk, num++, next_start_us);
+                    if (pace_allows(get_us()))
+                    {
+                        sleep_until_us(next_start_us + offset_us);
+                        venc_submit(&stFrame, buffers[next].mb_blk, num++, next_start_us);
+                    }
                 }
                 early_index = next;
             }
@@ -2259,7 +2336,7 @@ void video_reset_encoder_params(void)
                          p->gop_seconds != d->gop_seconds || p->aq != d->aq ||
                          p->max_fps != d->max_fps || p->bitrate_kbps != d->bitrate_kbps ||
                          p->max_bitrate_kbps != d->max_bitrate_kbps || p->still_qp != d->still_qp ||
-                         p->auto_refresh != d->auto_refresh;
+                         p->auto_refresh != d->auto_refresh || p->pace_kbps != d->pace_kbps;
     venc_params = venc_params_defaults;
     pthread_mutex_unlock(&venc_params_mutex);
     if (changed)

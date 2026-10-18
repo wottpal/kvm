@@ -280,6 +280,7 @@ message VideoEncoderParams {
   int32 max_bitrate_kbps = 7;
   int32 still_qp = 8;
   bool auto_refresh = 9;
+  int32 pace_kbps = 10;
 }
 
 message VideoEncoderStatus {

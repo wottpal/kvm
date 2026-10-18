@@ -25,6 +25,9 @@ type VideoEncoderParams struct {
 	// AutoRefresh lets the device start still refreshes on its own; a client
 	// that drives them (refreshRegions, D13) turns it off.
 	AutoRefresh bool `json:"autoRefresh"`
+	// PaceKbps leaves captured frames out while the encoded bytes run more
+	// than 40 ms ahead of this rate (D18); 0 = off.
+	PaceKbps int `json:"paceKbps"`
 }
 
 // VideoEncoderParamsUpdate is a partial VideoEncoderParams; nil fields keep
@@ -40,6 +43,7 @@ type VideoEncoderParamsUpdate struct {
 	MaxBitrateKbps *int  `json:"maxBitrateKbps"`
 	StillQP        *int  `json:"stillQp"`
 	AutoRefresh    *bool `json:"autoRefresh"`
+	PaceKbps       *int  `json:"paceKbps"`
 }
 
 // VideoEncoderStatus is the effective encoder configuration.
@@ -80,6 +84,8 @@ func (p VideoEncoderParams) Validate() error {
 		return fmt.Errorf("maxBitrateKbps (%d) must be >= bitrateKbps (%d)", p.MaxBitrateKbps, p.BitrateKbps)
 	case p.StillQP < 1 || p.StillQP > 51:
 		return fmt.Errorf("stillQp must be 1-51, got %d", p.StillQP)
+	case p.PaceKbps != 0 && (p.PaceKbps < 100 || p.PaceKbps > 50000):
+		return fmt.Errorf("paceKbps must be 100-50000, or 0 for no pacing, got %d", p.PaceKbps)
 	}
 	return nil
 }
@@ -113,6 +119,9 @@ func (u VideoEncoderParamsUpdate) ApplyTo(p VideoEncoderParams) VideoEncoderPara
 	if u.AutoRefresh != nil {
 		p.AutoRefresh = *u.AutoRefresh
 	}
+	if u.PaceKbps != nil {
+		p.PaceKbps = *u.PaceKbps
+	}
 	return p
 }
 
@@ -134,6 +143,7 @@ func (p VideoEncoderParams) toProto() *pb.VideoEncoderParams {
 		MaxBitrateKbps: int32(p.MaxBitrateKbps),
 		StillQp:        int32(p.StillQP),
 		AutoRefresh:    p.AutoRefresh,
+		PaceKbps:       int32(p.PaceKbps),
 	}
 }
 
@@ -148,6 +158,7 @@ func videoEncoderParamsFromProto(p *pb.VideoEncoderParams) VideoEncoderParams {
 		MaxBitrateKbps: int(p.GetMaxBitrateKbps()),
 		StillQP:        int(p.GetStillQp()),
 		AutoRefresh:    p.GetAutoRefresh(),
+		PaceKbps:       int(p.GetPaceKbps()),
 	}
 }
 

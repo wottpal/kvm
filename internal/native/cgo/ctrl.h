@@ -27,6 +27,7 @@ typedef struct
     int max_bitrate_kbps; // 100-50000 (>= bitrate_kbps), 0 = 1.5x target
     int still_qp;         // 1-51: QP of the keyframe that refreshes a still screen (>= min_qp: off)
     bool auto_refresh;    // the still refresh starts on its own (else only on request)
+    int pace_kbps;        // 0 = off, else 100-50000: captured frames are left out while encoded bytes run ahead of it (D18)
 } jetkvm_venc_params_t;
 
 // A region to refresh, in frame pixels (video_refresh_regions).

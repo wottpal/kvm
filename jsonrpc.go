@@ -209,9 +209,11 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // "refreshRegions": rpcRefreshRegions and the autoRefresh encoder parameter
 // (D13). "opusAudio": audio in Opus, 48 kHz stereo, for an offer with
 // opus/48000/2, silent frames not sent (D14). "browserAccess":
-// getBrowserAccessState and setBrowserAccessState (D16).
+// getBrowserAccessState and setBrowserAccessState (D16). "framePacing": the
+// paceKbps encoder parameter, and frame rate changes without a keyframe
+// (D18).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {

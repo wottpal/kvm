@@ -2367,6 +2367,7 @@ type VideoEncoderParams struct {
 	MaxBitrateKbps int32                  `protobuf:"varint,7,opt,name=max_bitrate_kbps,json=maxBitrateKbps,proto3" json:"max_bitrate_kbps,omitempty"`
 	StillQp        int32                  `protobuf:"varint,8,opt,name=still_qp,json=stillQp,proto3" json:"still_qp,omitempty"`
 	AutoRefresh    bool                   `protobuf:"varint,9,opt,name=auto_refresh,json=autoRefresh,proto3" json:"auto_refresh,omitempty"`
+	PaceKbps       int32                  `protobuf:"varint,10,opt,name=pace_kbps,json=paceKbps,proto3" json:"pace_kbps,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -2462,6 +2463,13 @@ func (x *VideoEncoderParams) GetAutoRefresh() bool {
 		return x.AutoRefresh
 	}
 	return false
+}
+
+func (x *VideoEncoderParams) GetPaceKbps() int32 {
+	if x != nil {
+		return x.PaceKbps
+	}
+	return 0
 }
 
 type VideoEncoderStatus struct {
@@ -2826,7 +2834,7 @@ const file_internal_native_proto_native_proto_rawDesc = "" +
 	"VideoFrame\x12\x14\n" +
 	"\x05frame\x18\x01 \x01(\fR\x05frame\x12\x1f\n" +
 	"\vduration_ns\x18\x02 \x01(\x03R\n" +
-	"durationNs\"\x97\x02\n" +
+	"durationNs\"\xb4\x02\n" +
 	"\x12VideoEncoderParams\x12\x15\n" +
 	"\x06min_qp\x18\x01 \x01(\x05R\x05minQp\x12\x15\n" +
 	"\x06max_qp\x18\x02 \x01(\x05R\x05maxQp\x12\x1f\n" +
@@ -2837,7 +2845,9 @@ const file_internal_native_proto_native_proto_rawDesc = "" +
 	"\fbitrate_kbps\x18\x06 \x01(\x05R\vbitrateKbps\x12(\n" +
 	"\x10max_bitrate_kbps\x18\a \x01(\x05R\x0emaxBitrateKbps\x12\x19\n" +
 	"\bstill_qp\x18\b \x01(\x05R\astillQp\x12!\n" +
-	"\fauto_refresh\x18\t \x01(\bR\vautoRefresh\"\xcc\x02\n" +
+	"\fauto_refresh\x18\t \x01(\bR\vautoRefresh\x12\x1b\n" +
+	"\tpace_kbps\x18\n" +
+	" \x01(\x05R\bpaceKbps\"\xcc\x02\n" +
 	"\x12VideoEncoderStatus\x122\n" +
 	"\x06params\x18\x01 \x01(\v2\x1a.native.VideoEncoderParamsR\x06params\x12\x1d\n" +
 	"\n" +
