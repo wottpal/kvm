@@ -211,9 +211,10 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // opus/48000/2, silent frames not sent (D14). "browserAccess":
 // getBrowserAccessState and setBrowserAccessState (D16). "framePacing": the
 // paceKbps encoder parameter, and frame rate changes without a keyframe
-// (D18).
+// (D18). "stunServers": STUN servers from a local client's session request
+// (D19).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing", "stunServers"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {

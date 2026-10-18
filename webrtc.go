@@ -487,6 +487,16 @@ func newSession(config SessionConfig) (*Session, error) {
 		scopedLogger = webrtcLogger
 	}
 
+	if !config.IsCloud {
+		// A local client may name STUN servers (D19): the device then also
+		// offers its public address, so a client away from home can reach it
+		// directly instead of through a tunnel the device encrypts itself.
+		if urls := localSTUNServers(config.ICEServers); len(urls) > 0 {
+			iceServer.URLs = urls
+			scopedLogger.Info().Strs("stunServers", urls).Msg("Using STUN servers provided by the local client")
+		}
+	}
+
 	if config.IsCloud {
 		if config.ICEServers == nil {
 			scopedLogger.Info().Msg("ICE Servers not provided by cloud")

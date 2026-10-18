@@ -25,6 +25,7 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/mdns/v2 v2.1.0
 	github.com/pion/rtcp v1.2.16
+	github.com/pion/stun/v3 v3.0.2
 	github.com/pion/webrtc/v4 v4.2.1
 	github.com/pojntfx/go-nbd v0.3.2
 	github.com/prometheus/client_golang v1.23.2
@@ -89,7 +90,6 @@ require (
 	github.com/pion/sctp v1.9.0 // indirect
 	github.com/pion/sdp/v3 v3.0.17 // indirect
 	github.com/pion/srtp/v3 v3.0.9 // indirect
-	github.com/pion/stun/v3 v3.0.2 // indirect
 	github.com/pion/transport/v3 v3.1.1 // indirect
 	github.com/pion/turn/v4 v4.1.3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
