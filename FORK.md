@@ -732,11 +732,12 @@ copy files with `ssh ... "cat > file" < file`.
   check its SHA-256, `sync` and reboot. At boot the device moves the update into place, as an OTA update does.
 - **Install remotely** (a device you reach only over the network, such as Tailscale): also copy
   `scripts/fork/install_guard.sh` to `/userdata/init.d/S99install-guard` and `chmod +x` it (the boot scripts run
-  only executables there), copy the running build to `/userdata/jetkvm/jetkvm_app.known-good`, and write `0` to
+  only executables there), keep the running build as `/userdata/jetkvm/jetkvm_app.backup`, and write `0` to
   `/userdata/install-guard.armed` before the reboot. If the new app doesn't answer `/device/status` within 2.5–4
   minutes of a boot and again 5 minutes later, or the device boots 3 times without that (a crash loop), the guard
-  puts the known-good build back and reboots. Run `reboot` in the SSH session's foreground: a backgrounded one dies
-  with the session. Delete the marker once the new build has proven itself.
+  puts the backup back and reboots. A `reboot` sent to the background (`(sleep 1; reboot) > /dev/null 2>&1 &`) must
+  have its output redirected: a write to the SSH channel after it closed kills it. Delete the marker once the new
+  build has proven itself. BlitzKVM's JetKVM Setup does all this by itself.
 
 ### Sync with upstream
 
