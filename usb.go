@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jetkvm/kvm/internal/hidrpc"
 	"github.com/jetkvm/kvm/internal/usbgadget"
 )
 
@@ -57,7 +58,9 @@ func initUsbGadget() {
 	})
 
 	gadget.SetOnKeysDownChange(func(state usbgadget.KeysDownState) {
-		if currentSession != nil {
+		// What the approval broker types (a password) never reaches the
+		// session (D20).
+		if currentSession != nil && !approvalsActing.Load() {
 			currentSession.enqueueKeysDownState(state)
 			currentSession.resetKeepAliveTime()
 		}
@@ -72,8 +75,10 @@ func initUsbGadget() {
 // rpcHidReport wraps a HID gadget call with the common guard (skip if USB not
 // ready) and error suppression (swallow transient HID errors during rebind).
 func rpcHidReport(fn func() error) error {
-	if !usbReadyForHidReports() {
-		return nil
+	approvalsInput.RLock()
+	defer approvalsInput.RUnlock()
+	if !usbReadyForHidReports() || approvalsActing.Load() {
+		return nil // the approval broker is clicking or typing (D20)
 	}
 	if err := fn(); err != nil && !usbgadget.IsHIDTemporarilyUnavailableError(err) {
 		return err
@@ -138,6 +143,9 @@ func rpcGetKeyboardLedState() (state usbgadget.KeyboardState) {
 }
 
 func rpcGetKeysDownState() (state usbgadget.KeysDownState) {
+	if approvalsActing.Load() {
+		return usbgadget.KeysDownState{Keys: make([]byte, hidrpc.HidKeyBufferSize)}
+	}
 	return gadget.GetKeysDownState()
 }
 

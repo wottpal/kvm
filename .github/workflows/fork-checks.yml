@@ -37,3 +37,32 @@ jobs:
           GOARCH: "386"
           CGO_ENABLED: "0"
         run: go test ./internal/hidrpc/ ./internal/webguard/ ./internal/redact/ ./internal/websecure/ ./internal/native/refresh/ ./internal/hostlink/
+      - name: Build D20's approval module on linux/386
+        env:
+          GOARCH: "386"
+          CGO_ENABLED: "0"
+        run: go vet github.com/wottpal/blitzkvm/approval/...
+
+  vendored-approval:
+    # D20: third_party/blitzkvm-approval must be BlitzKVM's approval module at
+    # the commit its SOURCE names, unchanged.
+    name: D20 approval module matches BlitzKVM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the source commit
+        id: source
+        run: |
+          rev=$(cat third_party/blitzkvm-approval/SOURCE)
+          case "$rev" in *+changes|'?') echo "synced from uncommitted BlitzKVM ($rev): sync from a pushed commit" >&2; exit 1 ;; esac
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        with:
+          repository: wottpal/blitzkvm
+          ref: ${{ steps.source.outputs.rev }}
+          path: blitzkvm-src
+          fetch-depth: 0
+      - name: Sync and compare
+        run: |
+          scripts/fork/sync_approval.sh blitzkvm-src
+          git diff --exit-code -- third_party/blitzkvm-approval

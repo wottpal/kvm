@@ -214,7 +214,8 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // (D18). "stunServers": STUN servers from a local client's session request
 // (D19).
 func rpcGetFirmwareFeatures() []string {
-	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing", "stunServers"}
+	return []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing", "stunServers",
+		"approvals"}
 }
 
 func rpcGetVideoEncoderParams() (native.VideoEncoderStatus, error) {
@@ -968,6 +969,7 @@ var factoryResetPaths = []string{
 	SerialCommandHistoryPath,
 	failsafeDefaultLastCrashPath,
 	browserAccessOffFile, // D16
+	approvalsDir,         // D20
 }
 
 func rpcFactoryReset() error {
@@ -1572,6 +1574,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"setBrowserAccessState":      {Func: rpcSetBrowserAccessState, Params: []string{"enabled"}},
 	"getHostLinkState":           {Func: rpcGetHostLinkState, OptionalParams: []string{"probe"}},
 	"setHostLinkState":           {Func: rpcSetHostLinkState, Params: []string{"enabled"}},
+	"getApprovalsState":          {Func: rpcGetApprovalsState},                                                         // D20
+	"setApprovalsEnabled":        {Func: rpcSetApprovalsEnabled, Params: []string{"enabled"}, OptionalParams: []string{"roster"}}, // D20
 	"getSupportedVideoCodecs":    {Func: rpcGetSupportedVideoCodecs},
 	"getVideoCodecPreference":    {Func: rpcGetVideoCodecPreference},
 	"setVideoCodecPreference":    {Func: rpcSetVideoCodecPreference, Params: []string{"codec"}},

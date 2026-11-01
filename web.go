@@ -174,6 +174,9 @@ func setupRouter() *gin.Engine {
 	// We use this to determine if the device is setup
 	r.GET("/device/status", handleDeviceStatus)
 
+	// D20: approvers authenticate with their keys inside the protocol.
+	r.GET("/approvals/v1/ws", handleApprovalsWS)
+
 	// We use this to setup the device in the welcome page
 	r.POST("/device/setup", handleSetup)
 

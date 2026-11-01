@@ -4,9 +4,11 @@
 // The link runs its own IPv6 and TCP stack (gVisor's netstack) on the
 // interface's raw frames, and the device's kernel never configures an
 // address there: nothing the JetKVM serves (its web server, SSH, mDNS) is
-// reachable from the computer. The stack only dials out, to the computer's
-// SSH server for a client's clipboard sync, and takes one short report from
-// the computer when a client installs its key.
+// reachable from the computer. The stack dials out, to the computer's SSH
+// server for a client's clipboard sync, takes one short report from the
+// computer when a client installs its key, and, while remote approvals are
+// on (D20), takes the computer's approval daemon on ApprovalsPort, which
+// speaks only the approval protocol.
 package hostlink
 
 import (
@@ -42,6 +44,8 @@ const (
 	// ReportPort takes the computer's report: the installer a client types
 	// on the computer sends its user name here.
 	ReportPort = 4022
+	// ApprovalsPort takes the computer's approval daemon (D20).
+	ApprovalsPort = 4023
 
 	reportMax = 1024
 	mdnsPort  = 5353
@@ -111,6 +115,12 @@ func New(ep stack.LinkEndpoint, mac net.HardwareAddr, log *zerolog.Logger) (*Lin
 	l.listener = listener
 	go l.serveReports(listener)
 	return l, nil
+}
+
+// Listen takes TCP connections from the computer on port. The listener
+// closes with the link.
+func (l *Link) Listen(port uint16) (net.Listener, error) {
+	return gonet.ListenTCP(l.stack, tcpip.FullAddress{NIC: nicID, Port: port}, ipv6.ProtocolNumber)
 }
 
 // LocalAddress is the device's link-local address.

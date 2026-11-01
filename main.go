@@ -67,6 +67,7 @@ func Main() {
 	setProcTitle("initUsbGadget")
 	initUsbGadget()
 	go superviseHostLink()
+	initApprovals()
 
 	setProcTitle("initNative")
 	initNative(systemVersionLocal, appVersionLocal)

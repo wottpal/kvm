@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/jetkvm/kvm/internal/sync"
@@ -536,7 +537,25 @@ func (u *UsbGadget) UpdateKeysDown(modifier byte, keys []byte) KeysDownState {
 }
 
 func (u *UsbGadget) KeyboardReport(modifier byte, keys []byte) error {
+	return u.keyboardReport(modifier, keys, true)
+}
+
+// KeyboardReportSecret writes a report like KeyboardReport but never logs
+// its keys: the approval broker types passwords with it (FORK.md D20).
+func (u *UsbGadget) KeyboardReportSecret(modifier byte, keys []byte) error {
+	return u.keyboardReport(modifier, keys, false)
+}
+
+// secretKeyboardWrite is set while KeyboardReportSecret writes: the write
+// path then logs no report bytes either.
+var secretKeyboardWrite atomic.Bool
+
+func (u *UsbGadget) keyboardReport(modifier byte, keys []byte, logKeys bool) error {
 	defer u.resetUserInputTime()
+	if !logKeys {
+		secretKeyboardWrite.Store(true)
+		defer secretKeyboardWrite.Store(false)
+	}
 
 	if len(keys) > hidKeyBufferSize {
 		keys = keys[:hidKeyBufferSize]
@@ -548,7 +567,11 @@ func (u *UsbGadget) KeyboardReport(modifier byte, keys []byte) error {
 	keyboardMutex.Lock()
 	err := u.keyboardWriteHidFileLocked(modifier, keys)
 	if err != nil && !IsHIDTemporarilyUnavailableError(err) {
-		u.log.Warn().Uint8("modifier", modifier).Uints8("keys", keys).Msg("Could not write keyboard report to hidg0")
+		if logKeys {
+			u.log.Warn().Uint8("modifier", modifier).Uints8("keys", keys).Msg("Could not write keyboard report to hidg0")
+		} else {
+			u.log.Warn().Err(err).Msg("Could not write keyboard report to hidg0")
+		}
 	}
 	u.UpdateKeysDown(modifier, keys)
 	keyboardMutex.Unlock()

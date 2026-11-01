@@ -203,3 +203,45 @@ func TestParseReport(t *testing.T) {
 		t.Fatalf("control characters kept: %+v %v", r, err)
 	}
 }
+
+// TestListenTakesTheComputer: a listener on the link (D20's approvals port)
+// accepts the computer's connection and carries its bytes both ways.
+func TestListenTakesTheComputer(t *testing.T) {
+	link, host := newPair(t)
+	ln, err := link.Listen(ApprovalsPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			accepted <- c
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := gonet.DialContextTCP(ctx, host.stack,
+		tcpip.FullAddress{NIC: 1, Addr: header.LinkLocalAddr(tcpip.LinkAddress(deviceMAC)), Port: ApprovalsPort}, ipv6.ProtocolNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var device net.Conn
+	select {
+	case device = <-accepted:
+	case <-ctx.Done():
+		t.Fatal("no connection accepted")
+	}
+	defer device.Close()
+	_, _ = conn.Write([]byte("ping\n"))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(device, buf); err != nil || string(buf) != "ping\n" {
+		t.Fatalf("device read %q: %v", buf, err)
+	}
+	_, _ = device.Write([]byte("pong\n"))
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "pong\n" {
+		t.Fatalf("computer read %q: %v", buf, err)
+	}
+}

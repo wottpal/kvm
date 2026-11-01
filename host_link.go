@@ -98,6 +98,9 @@ func rpcGetHostLinkState(probe bool) HostLinkState {
 // rpcSetHostLinkState turns the link on or off. The gadget changes, so the
 // computer re-enumerates the JetKVM's USB devices once.
 func rpcSetHostLinkState(enabled bool) error {
+	if !enabled && approvalsEnabled() {
+		return errors.New("remote approvals use the host link: turn them off first")
+	}
 	if enabled == hostLinkEnabled() {
 		if enabled && currentHostLink() == nil {
 			return startHostLink()
