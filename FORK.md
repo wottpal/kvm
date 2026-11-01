@@ -12,14 +12,15 @@ or removes a divergence updates this file in the same pull request.
 - **Merge base:** `8f6c3001b1064eb32b3f66afd04efbe536bbaf87` (`release/0.5.9` plus upstream `dev` up to "Revert \"Add Auto
   video quality using RTCP REMB\" (#1693)", 2026-10-05)
 - **Fork created:** 2026-10-11. Last upstream sync: 2026-10-11.
-- **Latest release:** `release/0.5.9-fork.8` (see **Releases**).
+- **Latest release:** `release/0.5.9-fork.9` (see **Releases**).
 
 ## Policy
 
 - **Firmware only.** The fork never changes the web UI (`ui/`), the device's persisted configuration or its update
-  mechanism. Every divergence lives in the video, audio or input path and its control API, or hardens the device's
-  security (D15, D16). The only state the fork stores is D16's flag file, outside the configuration; stock firmware
-  ignores it.
+  mechanism. Every divergence lives in the video, audio or input path and its control API, hardens the device's
+  security (D15, D16), or adds a service for BlitzKVM that stock firmware simply lacks (D17's host link, D20's
+  approval broker). The fork's state lives outside the configuration, where stock firmware ignores it: D16's and
+  D17's flag files and D20's directory (`/userdata/jetkvm/approvals`).
 - **Defaults change for every client.** Encoder divergences change what every client gets, the web UI included.
   Runtime overrides stay in memory and drop back to those defaults whenever the stream stops or another session
   takes over.
@@ -655,6 +656,63 @@ It skips HTML comments and fenced code blocks.
   DERP besides. When BlitzKVM reaches the device that way, it names public STUN servers so ICE can find a direct UDP
   path; the session stays on the tunnel where none works.
 - **Remove when:** upstream lets local clients name STUN servers.
+
+### D20 — Approval broker
+
+- **Since:** 2026-11-01
+- **Kind:** feature
+- **Upstream:** fork-only
+- **Files:**
+  - `approvals.go`
+  - `third_party/blitzkvm-approval/`
+  - `scripts/fork/sync_approval.sh`
+  - `internal/hostlink/hostlink.go`
+  - `internal/hostlink/hostlink_test.go`
+  - `internal/usbgadget/hid_keyboard.go`
+  - `internal/usbgadget/utils.go`
+  - `host_link.go`
+  - `usb.go`
+  - `jsonrpc.go`
+  - `web.go`
+  - `main.go`
+  - `go.mod`
+  - `go.sum`
+  - `.github/workflows/fork-checks.yml`
+- **What:** BlitzKVM's remote approvals. A request on the computer (sudo, a 1Password CLI access prompt, a password
+  dialog, the lock screen, an agent's `blitzkvm-remote confirm`) reaches the owner's iPhone and Macs, who approve it
+  with Face ID or Touch ID; for screen requests the device then clicks or types on the computer. The protocol is
+  BlitzKVM's `approval/PROTOCOL.md`; its broker (`approval/broker`, MIT) is copied into
+  `third_party/blitzkvm-approval` by `scripts/fork/sync_approval.sh` and replaced in `go.mod`, so the emulator and the
+  device run the same code; `SOURCE` there names the BlitzKVM commit, and CI checks the copy against it.
+  - **Trust:** a roster signed by an owner's Secure Enclave key lists the approvers, the targets (the computer's
+    root daemon key) and the relay. The first roster arrives through `setApprovalsEnabled` on an authenticated,
+    identity-pinned session; later ones only signed by an owner of the current one, with a higher sequence number.
+    Every request is signed by the computer's daemon and the broker, every decision by an approver; the computer's
+    daemon checks decisions itself, so a compromised device can't approve sudo.
+  - **Link:** the host link's stack (D17) listens on port 4023 for the computer's daemon (4 connections at a time,
+    each authenticated by the roster's target key within the first message). The stack serves nothing else; the
+    device's own services stay unreachable from the computer.
+  - **Approvers:** `GET /approvals/v1/ws` (no cookie: approvers authenticate with their keys inside the protocol;
+    requests with an `Origin` header, that is browsers, get 403; 16 sockets at most), and outbound to the roster's
+    relay (a Cloudflare Worker that only sees sealed boxes). Every message to and from an approver is sealed with
+    HPKE.
+  - **Keyboard and pointer:** for an approved screen request the computer's daemon sends steps (a click as a fraction
+    of the display; Return, Escape, Tab, Backspace, Shift, Caps Lock; the approval's password with the key map of the
+    computer's input source, once). While the broker acts, the session's keyboard and pointer reports are dropped,
+    key states aren't sent to the session (or answered by `getKeyDownState`), and `KeyboardReportSecret` writes
+    reports without logging keys (not even a failed write's trace). Session reports take a read lock around that
+    check, so none in flight lands mid-typing. Caps Lock is turned off before characters are typed. A secret is
+    typed a character at a time; the daemon can abort between characters and learns how many were typed.
+  - **API:** `getApprovalsState` (broker identity, roster sequence, approvers, the connected target, pending count,
+    recent events without secrets) and `setApprovalsEnabled` (`{"enabled": bool, "roster": envelope}`; on needs the
+    host link on). `setHostLinkState` refuses to turn the link off while approvals are on. Listed as `approvals` by
+    `getFirmwareFeatures`. The broker takes requests only once the device's clock is synced.
+  - **State:** `/userdata/jetkvm/approvals/` holds the broker's keys (`broker.key`) and the roster (`roster.json`),
+    written atomically; approvals are on while a roster is there. A factory reset removes the directory.
+- **Why:** the computer's own prompts (1Password, sudo, macOS) accept only its Touch ID, an Apple Watch or a
+  password; on a computer reached through the KVM none of them is at hand. The broker turns an approval on the
+  owner's phone or Mac into the click or the typed password the prompt needs, or into a signed approval sudo checks.
+- **Remove when:** never (fork-only).
 
 ## Repository settings
 
