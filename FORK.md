@@ -668,11 +668,20 @@ It skips HTML comments and fenced code blocks.
   - `scripts/fork/sync_approval.sh`
   - `internal/hostlink/hostlink.go`
   - `internal/hostlink/hostlink_test.go`
-  - `internal/native/cgo/video.c`, `internal/native/cgo/ctrl.c`, `internal/native/cgo/ctrl.h`
-  - `internal/native/video.go`, `internal/native/interface.go`, `internal/native/cgo_linux.go`,
-    `internal/native/cgo_notlinux.go`, `internal/native/empty.go`, `internal/native/proxy.go`,
-    `internal/native/grpc_clientmethods.go`, `internal/native/grpc_servermethods.go`,
-    `internal/native/proto/native.proto` (and its generated `*.pb.go`)
+  - `internal/native/cgo/video.c`
+  - `internal/native/cgo/ctrl.c`
+  - `internal/native/cgo/ctrl.h`
+  - `internal/native/video.go`
+  - `internal/native/interface.go`
+  - `internal/native/cgo_linux.go`
+  - `internal/native/cgo_notlinux.go`
+  - `internal/native/empty.go`
+  - `internal/native/proxy.go`
+  - `internal/native/grpc_clientmethods.go`
+  - `internal/native/grpc_servermethods.go`
+  - `internal/native/proto/native.proto`
+  - `internal/native/proto/native.pb.go`
+  - `internal/native/proto/native_grpc.pb.go`
   - `internal/usbgadget/config.go`
   - `internal/usbgadget/hid_keyboard.go`
   - `internal/usbgadget/utils.go`
