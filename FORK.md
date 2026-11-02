@@ -14,7 +14,7 @@ or removes a divergence updates this file in the same pull request.
   bump: upstream released 0.5.10 from a branch, `release-0.5.10`, as `release/0.5.9` plus #1723–#1725 and #1639
   picked from `dev`.
 - **Fork created:** 2026-10-11. Last upstream sync: 2026-11-02 (`dev` to #1725).
-- **Latest release:** `release/0.5.9-fork.11` (see **Releases**).
+- **Latest release:** `release/0.5.10-fork.1` (see **Releases**).
 
 ## Policy
 
@@ -804,6 +804,7 @@ upstream sync cannot start running in this fork unnoticed.
 | `release/0.5.9-fork.9` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `7ac763ebd33f67b0c37fcc7dd28888916a88680c4db7b8be48a3a1dbc9706660` | D01–D19     | Adds D18 (frame pacing, frame rate changes without a keyframe) and D19 (STUN servers from a local client), of `9f30d24`; 35,257,208 bytes; installed on the maintainer's device 2026-10-18, over Tailscale with the boot guard |
 | `release/0.5.9-fork.10` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `5043c605948e7ae3ab3767febb360b3d264c0089acc80eed35feca869216cecb` | D01–D20     | Adds D20 (approval broker for BlitzKVM's remote approvals, BlitzKVM `7443f1f`), of `84ed6ba`; 35,762,392 bytes; installed on the maintainer's device 2026-11-02 with the boot guard |
 | `release/0.5.9-fork.11` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `8f105e7c7d9b1fcccf9b5b7d2f406312aa0bfb64d3535ff1516f0785f0b1b2b1` | D01–D20     | D20: a picture of the screen with each approval request (`VideoGrabFrame`), BlitzKVM `5a422b0`, of `7d9fe9a`; 35,807,984 bytes; installed on the maintainer's device 2026-11-02 with the boot guard |
+| `release/0.5.10-fork.1` | `d646be8` (upstream `dev` to #1725, the changes of `release/0.5.10`) | `1e3c70b891bd06d6dbada61107373a3bce1a12744383216328dc540ca966fb2f` | D01–D21     | Upstream sync (Go 1.26.10, root certificates, Multipath TCP off) and D21 (no automatic updates), of `212cca1`, built as 0.5.10; 36,038,648 bytes; not installed (the maintainer's device runs upstream's 0.5.10) |
 
 Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.10-fork.1`, where
 `<upstream version>` is the latest upstream release whose changes the merge base holds (upstream releases from a
