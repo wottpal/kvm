@@ -130,6 +130,11 @@ func Main() {
 	startVideoSleepModeTicker()
 
 	go func() {
+		if !forkAutoUpdate {
+			logger.Info().Msg("auto-update off: fork builds update only by hand (FORK.md D21)")
+			return
+		}
+
 		// wait for 15 minutes before starting auto-update checks
 		// this is to avoid interfering with initial setup processes
 		// and to ensure the system is stable before checking for updates

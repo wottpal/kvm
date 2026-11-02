@@ -212,9 +212,9 @@ func rpcSetStreamQualityFactor(factor float64) error {
 // getBrowserAccessState and setBrowserAccessState (D16). "framePacing": the
 // paceKbps encoder parameter, and frame rate changes without a keyframe
 // (D18). "stunServers": STUN servers from a local client's session request
-// (D19).
+// (D19). "noAutoUpdate": the build never updates itself (D21).
 func rpcGetFirmwareFeatures() []string {
-	features := []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing", "stunServers"}
+	features := []string{"hidrpcWheel", "refreshRegions", "opusAudio", "browserAccess", "hostLink", "framePacing", "stunServers", "noAutoUpdate"}
 	if approvalsReady.Load() {
 		features = append(features, "approvals")
 	}
@@ -350,6 +350,12 @@ func rpcSetVideoCodecPreference(codec string) error {
 	}
 	return nil
 }
+
+// forkAutoUpdate keeps a fork build from updating itself (D21): the device's
+// auto-update would install the next upstream release over it. Updating stays
+// a manual choice (the web UI, MQTT's install command). The Auto Update
+// setting keeps its saved value, which stock firmware honors after a rollback.
+const forkAutoUpdate = false
 
 func rpcGetAutoUpdateState() (bool, error) {
 	return config.AutoUpdateEnabled, nil

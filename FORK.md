@@ -18,16 +18,16 @@ or removes a divergence updates this file in the same pull request.
 
 ## Policy
 
-- **Firmware only.** The fork never changes the web UI (`ui/`), the device's persisted configuration or its update
-  mechanism. Every divergence lives in the video, audio or input path and its control API, hardens the device's
-  security (D15, D16), or adds a service for BlitzKVM that stock firmware simply lacks (D17's host link, D20's
-  approval broker). The fork's state lives outside the configuration, where stock firmware ignores it: D16's and
+- **Firmware only.** The fork never changes the web UI (`ui/`) or the device's persisted configuration, and changes
+  its update mechanism in one way only: a fork build never updates itself (D21). Every divergence lives in the video,
+  audio or input path and its control API, hardens the device's security (D15, D16), adds a service for BlitzKVM that
+  stock firmware simply lacks (D17's host link, D20's approval broker), or keeps a fork build installed (D21). The fork's state lives outside the configuration, where stock firmware ignores it: D16's and
   D17's flag files and D20's directory (`/userdata/jetkvm/approvals`).
 - **Defaults change for every client.** Encoder divergences change what every client gets, the web UI included.
   Runtime overrides stay in memory and drop back to those defaults whenever the stream stops or another session
   takes over.
-- **Upstream version.** Builds keep upstream's `VERSION` (see **Releases**), so the device's auto-update replaces a fork
-  build with the next upstream release.
+- **Upstream version.** Builds keep upstream's `VERSION` (see **Releases**). A fork build never installs an upstream
+  release by itself (D21): upstream releases reach the fork through an upstream sync and a new fork release.
 - **Upstream later.** No divergence is proposed upstream yet. Each records its upstream status, and a divergence is
   removed once upstream ships it.
 
@@ -747,6 +747,29 @@ It skips HTML comments and fenced code blocks.
   owner's phone or Mac into the click or the typed password the prompt needs, or into a signed approval sudo checks.
 - **Remove when:** never (fork-only).
 
+### D21 — No automatic updates
+
+- **Since:** 2026-11-02
+- **Kind:** feature
+- **Upstream:** fork-only
+- **Files:**
+  - `main.go`
+  - `jsonrpc.go`
+- **What:** a fork build never updates itself, whatever the Auto Update setting says.
+  - The auto-update loop ends at start-up and logs `auto-update off: fork builds update only by hand (FORK.md D21)`.
+    The loop is upstream's; only its first lines are the fork's (`forkAutoUpdate` in `jsonrpc.go`).
+  - Updates someone asks for still run: the web UI's update page (`tryUpdate`, `tryUpdateComponents`) and MQTT's
+    install command. Checking for updates (`getUpdateStatus`, MQTT's update entity) is unchanged.
+  - The setting keeps its saved value: the web UI still shows and saves it (the fork doesn't change the UI), and stock
+    firmware honors it again after a rollback.
+  - System (rootfs) updates no longer install by themselves either; a manual update brings them, with upstream's app.
+  - Listed as `noAutoUpdate` by `getFirmwareFeatures`.
+- **Why:** fork builds carry upstream's version, so with auto-update on (the default) the device installed the next
+  upstream release over the fork: upstream's 0.5.10 (published 2026-11-02) replaced `release/0.5.9-fork.11` on the
+  maintainer's device the day it was installed, and BlitzKVM lost the fork's video tuning, audio and approvals until
+  someone reinstalled it. Upstream's changes reach the fork through an upstream sync instead.
+- **Remove when:** never (fork-only).
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -781,10 +804,12 @@ upstream sync cannot start running in this fork unnoticed.
 | `release/0.5.9-fork.10` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `5043c605948e7ae3ab3767febb360b3d264c0089acc80eed35feca869216cecb` | D01–D20     | Adds D20 (approval broker for BlitzKVM's remote approvals, BlitzKVM `7443f1f`), of `84ed6ba`; 35,762,392 bytes; installed on the maintainer's device 2026-11-02 with the boot guard |
 | `release/0.5.9-fork.11` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `8f105e7c7d9b1fcccf9b5b7d2f406312aa0bfb64d3535ff1516f0785f0b1b2b1` | D01–D20     | D20: a picture of the screen with each approval request (`VideoGrabFrame`), BlitzKVM `5a422b0`, of `7d9fe9a`; 35,807,984 bytes; installed on the maintainer's device 2026-11-02 with the boot guard |
 
-Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.9-fork.1`, where
-`<upstream version>` is the latest upstream release in the merge base. The binary itself is built with upstream's
-`VERSION` (`make build_release VERSION=0.5.9`): a `-dev` or other pre-release version sorts below the release, and the
-device's auto-update would replace it at once. With auto-update on, the next upstream release replaces a fork build.
+Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.10-fork.1`, where
+`<upstream version>` is the latest upstream release whose changes the merge base holds (upstream releases from a
+branch since 0.5.10, so its tag need not be in `dev`). The binary itself is built with that version
+(`make build_release VERSION=0.5.10`): a `-dev` or other pre-release version sorts below the release, and the web UI
+would offer the release as an update. Builds before `release/0.5.10-fork.1` update themselves: with auto-update on, the
+next upstream release replaced them (D21).
 
 ## Procedures
 
@@ -804,7 +829,7 @@ On Apple silicon with Docker or OrbStack:
 ```sh
 bash -c 'source scripts/build_utils.sh && build_docker_image'   # linux/amd64 buildkit image (Rosetta)
 (cd ui && nvm use) && make frontend                              # Node 22, embedded via go:embed
-make build_release VERSION=0.5.9                                 # bin/jetkvm_app, ARM uClibc
+make build_release VERSION=0.5.10                                # bin/jetkvm_app, ARM uClibc
 ```
 
 `ghcr.io/jetkvm/buildkit` refuses anonymous pulls, so the image is built locally from `Dockerfile.build` (Go 1.26.10
@@ -857,6 +882,9 @@ copy files with `ssh ... "cat > file" < file`.
 - **D18:** earlier fork builds ignore `paceKbps` (unknown parameters are ignored), and a frame rate change costs a
   keyframe there again; stock firmware has no `setVideoEncoderParams` at all (D06). BlitzKVM sends `paceKbps` only
   where `getFirmwareFeatures` lists `framePacing`.
+- **D21:** stock firmware and fork builds before `release/0.5.10-fork.1` update themselves again while the Auto Update
+  setting is on (on by default; the web UI's General settings, or `setAutoUpdateState`): the next upstream release
+  then replaces a fork build.
 - **D19:** stock firmware ignores `iceServers` on local sessions, so away from home BlitzKVM mostly stays on the
   tunnel (a window waits 1.5 s for a direct path first, then not again on that network for 30 minutes).
 - **D04, D06:** clients that call `requestKeyframe`, `getVideoEncoderParams` or `setVideoEncoderParams` get
