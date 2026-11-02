@@ -679,6 +679,7 @@ It skips HTML comments and fenced code blocks.
   - `go.mod`
   - `go.sum`
   - `Dockerfile.build`
+  - `scripts/build_utils.sh`
   - `.github/workflows/fork-checks.yml`
 - **What:** BlitzKVM's remote approvals. A request on the computer (sudo, a 1Password CLI access prompt, a password
   dialog, the lock screen, an agent's `blitzkvm-remote confirm`) reaches the owner's iPhone and Macs, who approve it

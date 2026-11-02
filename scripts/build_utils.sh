@@ -60,6 +60,10 @@ function prepare_docker_build_context() {
         go.sum \
         Dockerfile.build \
         "${DOCKER_BUILD_CONTEXT_DIR}"
+    # D20: go.mod's replace points at the vendored approval module.
+    mkdir -p "${DOCKER_BUILD_CONTEXT_DIR}/third_party/blitzkvm-approval"
+    cp third_party/blitzkvm-approval/go.mod third_party/blitzkvm-approval/go.sum \
+        "${DOCKER_BUILD_CONTEXT_DIR}/third_party/blitzkvm-approval/"
 
     # Podman/buildah auto-sets BUILDPLATFORM to the host arch and ignores
     # --build-arg overrides. On non-x86_64 hosts, patch the Dockerfile to
