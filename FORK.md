@@ -12,7 +12,7 @@ or removes a divergence updates this file in the same pull request.
 - **Merge base:** `8f6c3001b1064eb32b3f66afd04efbe536bbaf87` (`release/0.5.9` plus upstream `dev` up to "Revert \"Add Auto
   video quality using RTCP REMB\" (#1693)", 2026-10-05)
 - **Fork created:** 2026-10-11. Last upstream sync: 2026-10-11.
-- **Latest release:** `release/0.5.9-fork.10` (see **Releases**).
+- **Latest release:** `release/0.5.9-fork.11` (see **Releases**).
 
 ## Policy
 
@@ -768,6 +768,7 @@ upstream sync cannot start running in this fork unnoticed.
 | `release/0.5.9-fork.8` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `663c28be2ef170d732824570f1449dab5ebb3ff8a7022b930d543ae05978e9b8` | D01–D17     | Adds D17 (host link), of `ab02b13`; 35,253,096 bytes; installed on the maintainer's device 2026-10-15 |
 | `release/0.5.9-fork.9` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `7ac763ebd33f67b0c37fcc7dd28888916a88680c4db7b8be48a3a1dbc9706660` | D01–D19     | Adds D18 (frame pacing, frame rate changes without a keyframe) and D19 (STUN servers from a local client), of `9f30d24`; 35,257,208 bytes; installed on the maintainer's device 2026-10-18, over Tailscale with the boot guard |
 | `release/0.5.9-fork.10` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `5043c605948e7ae3ab3767febb360b3d264c0089acc80eed35feca869216cecb` | D01–D20     | Adds D20 (approval broker for BlitzKVM's remote approvals, BlitzKVM `7443f1f`), of `84ed6ba`; 35,762,392 bytes; installed on the maintainer's device 2026-11-02 with the boot guard |
+| `release/0.5.9-fork.11` | `8f6c300` (`release/0.5.9` plus upstream `dev` to #1693) | `8f105e7c7d9b1fcccf9b5b7d2f406312aa0bfb64d3535ff1516f0785f0b1b2b1` | D01–D20     | D20: a picture of the screen with each approval request (`VideoGrabFrame`), BlitzKVM `5a422b0`, of `7d9fe9a`; 35,807,984 bytes; installed on the maintainer's device 2026-11-02 with the boot guard |
 
 Fork releases are tagged `release/<upstream version>-fork.<n>`, for example `release/0.5.9-fork.1`, where
 `<upstream version>` is the latest upstream release in the merge base. The binary itself is built with upstream's
