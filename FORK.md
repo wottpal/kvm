@@ -9,9 +9,11 @@ or removes a divergence updates this file in the same pull request.
 ## Base
 
 - **Upstream:** [jetkvm/kvm](https://github.com/jetkvm/kvm), branch `dev`
-- **Merge base:** `8f6c3001b1064eb32b3f66afd04efbe536bbaf87` (`release/0.5.9` plus upstream `dev` up to "Revert \"Add Auto
-  video quality using RTCP REMB\" (#1693)", 2026-10-05)
-- **Fork created:** 2026-10-11. Last upstream sync: 2026-10-11.
+- **Merge base:** `d646be873a136f1d7c2ec743e6fe826e43c65b30` (upstream `dev` up to "build: allow releasing from a
+  branch other than dev" (#1725), 2026-10-30). It holds every change of upstream's `release/0.5.10` but its version
+  bump: upstream released 0.5.10 from a branch, `release-0.5.10`, as `release/0.5.9` plus #1723–#1725 and #1639
+  picked from `dev`.
+- **Fork created:** 2026-10-11. Last upstream sync: 2026-11-02 (`dev` to #1725).
 - **Latest release:** `release/0.5.9-fork.11` (see **Releases**).
 
 ## Policy
@@ -805,8 +807,8 @@ bash -c 'source scripts/build_utils.sh && build_docker_image'   # linux/amd64 bu
 make build_release VERSION=0.5.9                                 # bin/jetkvm_app, ARM uClibc
 ```
 
-`ghcr.io/jetkvm/buildkit` refuses anonymous pulls, so the image is built locally from `Dockerfile.build`; pass its tag
-as `DOCKER_BUILD_TAG` if it differs. After a change to `internal/native/proto/native.proto`, regenerate the Go code
+`ghcr.io/jetkvm/buildkit` refuses anonymous pulls, so the image is built locally from `Dockerfile.build` (Go 1.26.10
+since the 0.5.10 sync; rebuild it when that line changes); pass its tag as `DOCKER_BUILD_TAG` if it differs. After a change to `internal/native/proto/native.proto`, regenerate the Go code
 with `scripts/generate_proto.sh`, using the generator versions named in the generated files' headers (protoc 3.21.12,
 protoc-gen-go v1.36.11, protoc-gen-go-grpc v1.6.1).
 
