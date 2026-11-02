@@ -102,6 +102,10 @@ uint8_t jetkvm_video_get_streaming_status();
 int jetkvm_video_request_keyframe();
 int jetkvm_video_set_encoder_params(const jetkvm_venc_params_t *params);
 int jetkvm_video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, int frames);
+// A picture of the screen (D20): the next captured frame as YUYV, scaled to
+// fit max_w x max_h, into out (cap bytes). 0, or -3 when no frame came
+// within timeout_ms (not streaming, no signal), -2 when another grab waits.
+int jetkvm_video_grab_frame(uint8_t *out, int cap, int max_w, int max_h, int timeout_ms, int *w, int *h);
 void jetkvm_video_get_encoder_status(jetkvm_venc_status_t *status);
 void jetkvm_video_reset_encoder_params(void);
 int jetkvm_video_set_quality_factor(float quality_factor);
@@ -118,6 +122,7 @@ void video_send_format_report();
 int video_send_frame(const uint8_t *frame, ssize_t len);
 int video_set_encoder_params(const jetkvm_venc_params_t *params);
 int video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, int frames);
+int video_grab_frame(uint8_t *out, int cap, int max_w, int max_h, int timeout_ms, int *w, int *h);
 void video_get_encoder_status(jetkvm_venc_status_t *status);
 void video_reset_encoder_params(void);
 

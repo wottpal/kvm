@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -119,6 +120,15 @@ func (s *grpcServer) VideoSetEncoderParams(ctx context.Context, req *pb.VideoEnc
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	return &pb.Empty{}, nil
+}
+
+func (s *grpcServer) VideoGrabFrame(ctx context.Context, req *pb.VideoGrabFrameRequest) (*pb.ScreenFrame, error) {
+	timeout := min(time.Duration(req.GetTimeoutMs())*time.Millisecond, 10*time.Second)
+	frame, err := s.native.VideoGrabFrame(int(req.GetMaxWidth()), int(req.GetMaxHeight()), timeout)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	return &pb.ScreenFrame{Width: int32(frame.Width), Height: int32(frame.Height), Yuyv: frame.YUYV}, nil
 }
 
 func (s *grpcServer) VideoRefreshRegions(ctx context.Context, req *pb.VideoRefreshRegionsRequest) (*pb.Empty, error) {

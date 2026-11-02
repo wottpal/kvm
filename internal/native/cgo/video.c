@@ -25,6 +25,8 @@
 #include <assert.h>
 #include <sys/un.h>
 #include <sys/socket.h>
+#include <sys/mman.h>
+#include <linux/dma-buf.h>
 #include "video.h"
 #include "ctrl.h"
 #include "log.h"
@@ -1559,6 +1561,132 @@ const int input_buffer_count = 3;
 // about 19 MiB more. internal/native/encoder_params.go reports it to clients.
 #define VIDEO_CAPTURE_MAX_BYTES (8u << 20)
 
+// A picture of the screen for an approval request (D20): the capture loop
+// copies the next frame it dequeues, scaled down, while the caller waits.
+// Only between DQBUF and QBUF does the buffer hold that frame alone.
+typedef struct
+{
+    uint8_t *out;
+    int cap, max_w, max_h;
+    int w, h, result;
+    bool done;
+} grab_req_t;
+
+static pthread_mutex_t grab_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t grab_cond = PTHREAD_COND_INITIALIZER;
+static grab_req_t *grab_req = NULL;
+
+// grab_scale samples a YUYV frame down to dw x dh YUYV, each sample the mean
+// of a 2x2 block (chroma: of the two rows), centred in its source area.
+static void grab_scale(const uint8_t *src, uint32_t sw, uint32_t sh, uint32_t stride, uint8_t *dst, int dw, int dh)
+{
+    for (int y = 0; y < dh; y++)
+    {
+        const uint32_t sy = (uint32_t)(((uint64_t)(2 * y + 1) * sh) / (2u * dh));
+        const uint32_t sy1 = sy + 1 < sh ? sy + 1 : sy;
+        const uint8_t *r0 = src + (size_t)sy * stride, *r1 = src + (size_t)sy1 * stride;
+        uint8_t *out = dst + (size_t)y * dw * 2;
+        for (int x = 0; x < dw; x += 2)
+        {
+            int ys[2];
+            uint32_t first = 0;
+            for (int k = 0; k < 2; k++)
+            {
+                // Even, so the pixel and the next share a macro-pixel.
+                const uint32_t sx = (uint32_t)(((uint64_t)(2 * (x + k) + 1) * sw) / (2u * dw)) & ~1u;
+                const uint32_t o = sx * 2;
+                ys[k] = (r0[o] + r0[o + 2] + r1[o] + r1[o + 2] + 2) / 4;
+                if (k == 0)
+                    first = o;
+            }
+            out[x * 2] = (uint8_t)ys[0];
+            out[x * 2 + 1] = (uint8_t)((r0[first + 1] + r1[first + 1] + 1) / 2);
+            out[x * 2 + 2] = (uint8_t)ys[1];
+            out[x * 2 + 3] = (uint8_t)((r0[first + 3] + r1[first + 3] + 1) / 2);
+        }
+    }
+}
+
+// grab_serve answers a waiting grab from the frame just dequeued (fd, a
+// dma-buf of len bytes). Called from the capture loop only.
+static void grab_serve(int fd, size_t len, uint32_t width, uint32_t height, uint32_t stride)
+{
+    pthread_mutex_lock(&grab_mutex);
+    grab_req_t *r = grab_req;
+    if (r == NULL || r->done)
+    {
+        pthread_mutex_unlock(&grab_mutex);
+        return;
+    }
+    const RK_U64 t0 = get_us();
+    int dw = (int)width < r->max_w ? (int)width : r->max_w;
+    dw &= ~1;
+    int dh = (int)((uint64_t)height * dw / width);
+    if (dh > r->max_h)
+    {
+        dh = r->max_h;
+        dw = (int)((uint64_t)width * dh / height) & ~1;
+    }
+    r->result = -1;
+    if (dw >= 2 && dh >= 2 && (size_t)dw * dh * 2 <= (size_t)r->cap && (size_t)stride * height <= len)
+    {
+        void *p = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
+        if (p != MAP_FAILED)
+        {
+            struct dma_buf_sync sync = {.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+            ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+            grab_scale(p, width, height, stride, r->out, dw, dh);
+            sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+            ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+            munmap(p, len);
+            r->w = dw;
+            r->h = dh;
+            r->result = 0;
+        }
+        else
+        {
+            log_error("grab: mmap failed: %s", strerror(errno));
+        }
+    }
+    r->done = true;
+    log_info("grab: %dx%d from %ux%u in %llu us", dw, dh, width, height, (unsigned long long)(get_us() - t0));
+    pthread_cond_broadcast(&grab_cond);
+    pthread_mutex_unlock(&grab_mutex);
+}
+
+int video_grab_frame(uint8_t *out, int cap, int max_w, int max_h, int timeout_ms, int *w, int *h)
+{
+    grab_req_t r = {.out = out, .cap = cap, .max_w = max_w, .max_h = max_h, .result = -1};
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += timeout_ms / 1000;
+    until.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (until.tv_nsec >= 1000000000L)
+    {
+        until.tv_sec++;
+        until.tv_nsec -= 1000000000L;
+    }
+    pthread_mutex_lock(&grab_mutex);
+    if (grab_req != NULL)
+    {
+        pthread_mutex_unlock(&grab_mutex);
+        return -2; // one at a time
+    }
+    grab_req = &r;
+    while (!r.done)
+    {
+        if (pthread_cond_timedwait(&grab_cond, &grab_mutex, &until) == ETIMEDOUT)
+            break;
+    }
+    grab_req = NULL;
+    pthread_mutex_unlock(&grab_mutex);
+    if (!r.done)
+        return -3; // no frame came: not streaming, or no signal
+    *w = r.w;
+    *h = r.h;
+    return r.result;
+}
+
 static int32_t buf_init()
 {
     MB_POOL_CONFIG_S stMbPoolCfg;
@@ -1976,6 +2104,10 @@ void *run_video_stream(void *arg)
                 break;
             }
             log_trace("got frame, bytesused = %d", tmp_plane.bytesused);
+            {
+                const uint32_t stride = fmt.fmt.pix_mp.plane_fmt[0].bytesperline ? fmt.fmt.pix_mp.plane_fmt[0].bytesperline : width * 2;
+                grab_serve(tmp_plane.m.fd, tmp_plane.length, width, height, stride);
+            }
             const RK_U64 dq_us = get_us();
             const RK_U64 ts_us = (RK_U64)buf.timestamp.tv_sec * 1000000 + (RK_U64)buf.timestamp.tv_usec;
             if (last_ts_us != 0 && ts_us > last_ts_us)

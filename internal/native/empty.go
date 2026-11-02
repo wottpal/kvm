@@ -1,6 +1,11 @@
 package native
 
-import "github.com/jetkvm/kvm/internal/native/refresh"
+import (
+	"errors"
+	"time"
+
+	"github.com/jetkvm/kvm/internal/native/refresh"
+)
 
 type EmptyNativeInterface struct {
 }
@@ -65,6 +70,10 @@ func (e *EmptyNativeInterface) VideoSetEncoderParams(params VideoEncoderParams) 
 
 func (e *EmptyNativeInterface) VideoRefreshRegions(req refresh.Request) error {
 	return nil
+}
+
+func (e *EmptyNativeInterface) VideoGrabFrame(maxWidth, maxHeight int, timeout time.Duration) (ScreenFrame, error) {
+	return ScreenFrame{}, errors.New("no video")
 }
 
 func (e *EmptyNativeInterface) GetLVGLVersion() (string, error) {

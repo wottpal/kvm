@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"time"
 
 	pb "github.com/jetkvm/kvm/internal/native/proto"
 	"github.com/jetkvm/kvm/internal/native/refresh"
@@ -117,6 +118,20 @@ func (c *GRPCClient) VideoRefreshRegions(req refresh.Request) error {
 		Frames: int32(req.Frames),
 	})
 	return err
+}
+
+func (c *GRPCClient) VideoGrabFrame(maxWidth, maxHeight int, timeout time.Duration) (ScreenFrame, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+2*time.Second)
+	defer cancel()
+	resp, err := c.client.VideoGrabFrame(ctx, &pb.VideoGrabFrameRequest{
+		MaxWidth:  int32(maxWidth),
+		MaxHeight: int32(maxHeight),
+		TimeoutMs: int32(timeout.Milliseconds()),
+	})
+	if err != nil {
+		return ScreenFrame{}, err
+	}
+	return ScreenFrame{Width: int(resp.GetWidth()), Height: int(resp.GetHeight()), YUYV: resp.GetYuyv()}, nil
 }
 
 // UI methods

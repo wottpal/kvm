@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/jetkvm/kvm/internal/native/refresh"
@@ -255,6 +256,24 @@ func videoRefreshRegions(req refresh.Request) error {
 		return errors.New("a rect lies outside the frame")
 	default:
 		return fmt.Errorf("invalid region refresh: %d", ret)
+	}
+}
+
+// videoGrabFrame does not take cgoLock: it waits for the capture loop, and
+// video.c serializes grabs itself.
+func videoGrabFrame(maxWidth, maxHeight int, timeout time.Duration) (ScreenFrame, error) {
+	out := make([]byte, maxWidth*maxHeight*2)
+	var w, h C.int
+	switch ret := C.jetkvm_video_grab_frame((*C.uint8_t)(unsafe.Pointer(&out[0])), C.int(len(out)), C.int(maxWidth),
+		C.int(maxHeight), C.int(timeout.Milliseconds()), &w, &h); ret {
+	case 0:
+		return ScreenFrame{Width: int(w), Height: int(h), YUYV: out[:int(w)*int(h)*2]}, nil
+	case -2:
+		return ScreenFrame{}, errors.New("another frame grab is running")
+	case -3:
+		return ScreenFrame{}, errors.New("no frame: video isn't streaming or has no signal")
+	default:
+		return ScreenFrame{}, fmt.Errorf("frame grab failed: %d", ret)
 	}
 }
 

@@ -636,6 +636,14 @@ func (p *NativeProxy) VideoRefreshRegions(req refresh.Request) error {
 	})
 }
 
+func (p *NativeProxy) VideoGrabFrame(maxWidth, maxHeight int, timeout time.Duration) (frame ScreenFrame, err error) {
+	err = nativeProxyClientExecWithoutArgument(p, func(client *GRPCClient) error {
+		frame, err = client.VideoGrabFrame(maxWidth, maxHeight, timeout)
+		return err
+	})
+	return frame, err
+}
+
 func (p *NativeProxy) GetLVGLVersion() (string, error) {
 	return nativeProxyClientExec[string](p, func(client *GRPCClient) (string, error) {
 		return client.GetLVGLVersion()

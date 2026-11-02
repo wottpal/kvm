@@ -282,6 +282,23 @@ func (n *Native) VideoRefreshRegions(req refresh.Request) error {
 	return videoRefreshRegions(req)
 }
 
+// ScreenFrame is one captured frame, scaled down, as YUYV (4:2:2, limited
+// range): a picture of the screen for an approval request (D20).
+type ScreenFrame struct {
+	Width, Height int
+	YUYV          []byte
+}
+
+// VideoGrabFrame waits up to timeout for the next captured frame, scaled to
+// fit maxWidth x maxHeight. Like VideoRefreshRegions it skips videoLock:
+// the capture loop serves it, and it must not hold up a stream restart.
+func (n *Native) VideoGrabFrame(maxWidth, maxHeight int, timeout time.Duration) (ScreenFrame, error) {
+	if maxWidth < 2 || maxHeight < 2 || maxWidth*maxHeight > 1280*960 {
+		return ScreenFrame{}, fmt.Errorf("frame size %dx%d", maxWidth, maxHeight)
+	}
+	return videoGrabFrame(maxWidth, maxHeight, timeout)
+}
+
 // VideoGetStreamingStatus gets the streaming status of the video.
 func (n *Native) VideoGetStreamingStatus() VideoStreamingStatus {
 	n.videoLock.Lock()

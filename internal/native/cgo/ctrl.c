@@ -391,6 +391,10 @@ int jetkvm_video_refresh_regions(const jetkvm_rect_t *rects, int count, int qp, 
     return video_refresh_regions(rects, count, qp, frames);
 }
 
+int jetkvm_video_grab_frame(uint8_t *out, int cap, int max_w, int max_h, int timeout_ms, int *w, int *h) {
+    return video_grab_frame(out, cap, max_w, max_h, timeout_ms, w, h);
+}
+
 void jetkvm_video_get_encoder_status(jetkvm_venc_status_t *status) {
     video_get_encoder_status(status);
 }

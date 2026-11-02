@@ -222,6 +222,7 @@ func initApprovals() {
 		HID:    approvalsHID{},
 		Synced: func() bool { return timeSync != nil && timeSync.IsSyncSuccess() },
 		Logf:   func(format string, args ...any) { approvalsLogger.Info().Msgf(format, args...) },
+		Screen: approvalsScreen,
 		DialRelay: func(ctx context.Context, url string) (broker.Conn, error) {
 			c, _, err := websocket.Dial(ctx, url, nil)
 			if err != nil {
@@ -403,3 +404,39 @@ func rpcSetApprovalsEnabled(enabled bool, roster wire.Envelope) (broker.State, e
 }
 
 func approvalsEnabled() bool { return approvalsBroker != nil && approvalsBroker.Enabled() }
+
+// approvalsScreen takes a picture of the computer's screen for a request:
+// from the running capture, or, with no session, from a capture started for
+// it alone (the capture loop wakes the bridge from sleep mode). A session's
+// pause (virtual media) is kept: no picture then.
+func approvalsScreen(ctx context.Context) ([]byte, error) {
+	timeout := 4 * time.Second
+	if d, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(d)-500*time.Millisecond)
+	}
+	videoPauseMu.Lock()
+	cold := getActiveSessions() == 0 && videoPausedBy == nil
+	if cold {
+		_ = nativeInstance.VideoStart()
+	}
+	videoPauseMu.Unlock()
+	if cold {
+		defer func() {
+			videoPauseMu.Lock()
+			defer videoPauseMu.Unlock()
+			if getActiveSessions() == 0 {
+				_ = nativeInstance.VideoStop()
+				startVideoSleepModeTicker()
+			}
+		}()
+	}
+	frame, err := nativeInstance.VideoGrabFrame(640, 480, timeout)
+	if err != nil {
+		return nil, err
+	}
+	img, err := broker.ScreenFromYUYV(frame.Width, frame.Height, frame.YUYV)
+	if err != nil {
+		return nil, err
+	}
+	return broker.EncodeScreen(img)
+}

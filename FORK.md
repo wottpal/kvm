@@ -668,6 +668,11 @@ It skips HTML comments and fenced code blocks.
   - `scripts/fork/sync_approval.sh`
   - `internal/hostlink/hostlink.go`
   - `internal/hostlink/hostlink_test.go`
+  - `internal/native/cgo/video.c`, `internal/native/cgo/ctrl.c`, `internal/native/cgo/ctrl.h`
+  - `internal/native/video.go`, `internal/native/interface.go`, `internal/native/cgo_linux.go`,
+    `internal/native/cgo_notlinux.go`, `internal/native/empty.go`, `internal/native/proxy.go`,
+    `internal/native/grpc_clientmethods.go`, `internal/native/grpc_servermethods.go`,
+    `internal/native/proto/native.proto` (and its generated `*.pb.go`)
   - `internal/usbgadget/config.go`
   - `internal/usbgadget/hid_keyboard.go`
   - `internal/usbgadget/utils.go`
@@ -702,6 +707,12 @@ It skips HTML comments and fenced code blocks.
     sees sealed boxes). Every message to and from an approver is sealed with HPKE. The broker sends a pending request
     again to the roster's iPhones every 10 s (1Password) or 20 s (others) until it's answered, and a quiet push once
     it ends.
+  - **Screen:** with each request the broker sends one picture of the computer's screen, signed with its key
+    (`VideoGrabFrame`: the capture loop copies the next frame it dequeues, between `DQBUF` and `QBUF`, from the
+    dma-buf it maps for that, 2x2-averaged down to at most 640x480 YUYV; the app makes it a full-range JPEG of at most
+    64 KiB). With no session the app starts the capture for that grab alone and stops it again, re-arming the sleep
+    timer; a session's pause (virtual media) is kept. The grab logs its size and time (`grab: …`). One grab at a time;
+    a request that comes while one runs goes without.
   - **Keyboard and pointer:** for an approved screen request the computer's daemon sends steps (a click as a fraction
     of the display; Return, Escape, Tab, Backspace, Shift, Caps Lock; the approval's password with the key map of the
     computer's input source, once). From the approval of a screen request until it ends (`Hold`), the session's

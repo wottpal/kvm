@@ -36,6 +36,7 @@ const (
 	NativeService_VideoGetEncoderParams_FullMethodName             = "/native.NativeService/VideoGetEncoderParams"
 	NativeService_VideoSetEncoderParams_FullMethodName             = "/native.NativeService/VideoSetEncoderParams"
 	NativeService_VideoRefreshRegions_FullMethodName               = "/native.NativeService/VideoRefreshRegions"
+	NativeService_VideoGrabFrame_FullMethodName                    = "/native.NativeService/VideoGrabFrame"
 	NativeService_GetLVGLVersion_FullMethodName                    = "/native.NativeService/GetLVGLVersion"
 	NativeService_UIObjHide_FullMethodName                         = "/native.NativeService/UIObjHide"
 	NativeService_UIObjShow_FullMethodName                         = "/native.NativeService/UIObjShow"
@@ -84,6 +85,7 @@ type NativeServiceClient interface {
 	VideoGetEncoderParams(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VideoEncoderStatus, error)
 	VideoSetEncoderParams(ctx context.Context, in *VideoEncoderParams, opts ...grpc.CallOption) (*Empty, error)
 	VideoRefreshRegions(ctx context.Context, in *VideoRefreshRegionsRequest, opts ...grpc.CallOption) (*Empty, error)
+	VideoGrabFrame(ctx context.Context, in *VideoGrabFrameRequest, opts ...grpc.CallOption) (*ScreenFrame, error)
 	// UI methods
 	GetLVGLVersion(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetLVGLVersionResponse, error)
 	UIObjHide(ctx context.Context, in *UIObjHideRequest, opts ...grpc.CallOption) (*UIObjHideResponse, error)
@@ -282,6 +284,16 @@ func (c *nativeServiceClient) VideoRefreshRegions(ctx context.Context, in *Video
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, NativeService_VideoRefreshRegions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nativeServiceClient) VideoGrabFrame(ctx context.Context, in *VideoGrabFrameRequest, opts ...grpc.CallOption) (*ScreenFrame, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScreenFrame)
+	err := c.cc.Invoke(ctx, NativeService_VideoGrabFrame_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -532,6 +544,7 @@ type NativeServiceServer interface {
 	VideoGetEncoderParams(context.Context, *Empty) (*VideoEncoderStatus, error)
 	VideoSetEncoderParams(context.Context, *VideoEncoderParams) (*Empty, error)
 	VideoRefreshRegions(context.Context, *VideoRefreshRegionsRequest) (*Empty, error)
+	VideoGrabFrame(context.Context, *VideoGrabFrameRequest) (*ScreenFrame, error)
 	// UI methods
 	GetLVGLVersion(context.Context, *Empty) (*GetLVGLVersionResponse, error)
 	UIObjHide(context.Context, *UIObjHideRequest) (*UIObjHideResponse, error)
@@ -616,6 +629,9 @@ func (UnimplementedNativeServiceServer) VideoSetEncoderParams(context.Context, *
 }
 func (UnimplementedNativeServiceServer) VideoRefreshRegions(context.Context, *VideoRefreshRegionsRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method VideoRefreshRegions not implemented")
+}
+func (UnimplementedNativeServiceServer) VideoGrabFrame(context.Context, *VideoGrabFrameRequest) (*ScreenFrame, error) {
+	return nil, status.Error(codes.Unimplemented, "method VideoGrabFrame not implemented")
 }
 func (UnimplementedNativeServiceServer) GetLVGLVersion(context.Context, *Empty) (*GetLVGLVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetLVGLVersion not implemented")
@@ -1003,6 +1019,24 @@ func _NativeService_VideoRefreshRegions_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(NativeServiceServer).VideoRefreshRegions(ctx, req.(*VideoRefreshRegionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NativeService_VideoGrabFrame_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VideoGrabFrameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeServiceServer).VideoGrabFrame(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeService_VideoGrabFrame_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeServiceServer).VideoGrabFrame(ctx, req.(*VideoGrabFrameRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1452,6 +1486,10 @@ var NativeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "VideoRefreshRegions",
 			Handler:    _NativeService_VideoRefreshRegions_Handler,
+		},
+		{
+			MethodName: "VideoGrabFrame",
+			Handler:    _NativeService_VideoGrabFrame_Handler,
 		},
 		{
 			MethodName: "GetLVGLVersion",

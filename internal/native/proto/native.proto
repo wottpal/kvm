@@ -26,6 +26,7 @@ service NativeService {
   rpc VideoGetEncoderParams(Empty) returns (VideoEncoderStatus);
   rpc VideoSetEncoderParams(VideoEncoderParams) returns (Empty);
   rpc VideoRefreshRegions(VideoRefreshRegionsRequest) returns (Empty);
+  rpc VideoGrabFrame(VideoGrabFrameRequest) returns (ScreenFrame);
 
   // UI methods
   rpc GetLVGLVersion(Empty) returns (GetLVGLVersionResponse);
@@ -305,4 +306,17 @@ message VideoRefreshRegionsRequest {
   repeated VideoRect rects = 1;
   int32 qp = 2;
   int32 frames = 3;
+}
+
+// A picture of the screen for an approval request (D20).
+message VideoGrabFrameRequest {
+  int32 max_width = 1;
+  int32 max_height = 2;
+  int32 timeout_ms = 3;
+}
+
+message ScreenFrame {
+  int32 width = 1;
+  int32 height = 2;
+  bytes yuyv = 3; // 4:2:2, limited range
 }
