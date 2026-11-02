@@ -125,7 +125,7 @@ func (u *UsbGadget) writeWithTimeout(file *os.File, data []byte) (n int, err err
 	}
 
 	trace := u.log.Trace().Str("file", file.Name())
-	if !(file == u.keyboardHidFile && secretKeyboardWrite.Load()) { // D20: no password keys
+	if file != u.keyboardHidFile || !secretKeyboardWrite.Load() { // D20: no password keys
 		trace = trace.Bytes("data", data)
 	}
 	trace.Err(err).Msg("write failed")

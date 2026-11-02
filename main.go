@@ -67,7 +67,6 @@ func Main() {
 	setProcTitle("initUsbGadget")
 	initUsbGadget()
 	go superviseHostLink()
-	initApprovals()
 
 	setProcTitle("initNative")
 	initNative(systemVersionLocal, appVersionLocal)
@@ -79,6 +78,8 @@ func Main() {
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to load Root CA certificates")
 	}
+	// After the HTTP client and root CAs: the broker's relay dial uses them (D20).
+	initApprovals()
 	logger.Info().
 		Int("ca_certs_loaded", len(rootcerts.Certs())).
 		Msg("loaded Root CA certificates")

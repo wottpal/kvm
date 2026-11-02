@@ -22,7 +22,7 @@ for pkg in wire broker; do
 		[ -f "$src/$pkg/$(basename "$f")" ] || { echo "stale: $f (gone from $src/$pkg)" >&2; stale=1; }
 	done
 done
-rev=$(git -C "$src/.." rev-parse --short HEAD 2>/dev/null || echo '?')
+rev=$(git -C "$src/.." rev-parse HEAD 2>/dev/null || echo '?') # in full: actions/checkout takes no short SHA
 [ -z "$(git -C "$src/.." status --porcelain -- approval 2>/dev/null)" ] || rev="$rev+changes"
 # CI checks the copy against this commit (fork-checks: vendored-approval).
 echo "$rev" > "$dst/SOURCE"

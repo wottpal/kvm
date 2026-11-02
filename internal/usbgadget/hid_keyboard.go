@@ -280,7 +280,7 @@ func (u *UsbGadget) performAutoRelease(key byte) {
 
 	_, err := u.keypressReport(key, false)
 	if err != nil {
-		u.log.Warn().Uint8("key", key).Msg("failed to release key")
+		u.log.Warn().Err(err).Msg("failed to release a key") // no key: it may be a password's (D20)
 	}
 }
 

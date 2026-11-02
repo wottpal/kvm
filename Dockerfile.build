@@ -11,8 +11,9 @@ RUN /install-deps.sh
 # Create build directory
 RUN mkdir -p /build/
 
-# Copy go.mod and go.sum
+# Copy go.mod and go.sum, and the module go.mod's replace points at (D20)
 COPY go.mod go.sum /build/
+COPY third_party/blitzkvm-approval/go.mod third_party/blitzkvm-approval/go.sum /build/third_party/blitzkvm-approval/
 
 WORKDIR /build
 

@@ -69,6 +69,9 @@ var defaultGadgetConfig = map[string]gadgetConfigItem{
 	"network": networkConfig,
 }
 
+// AbsoluteMouseEnabled: the gadget has the absolute pointer (D20 clicks with it).
+func (u *UsbGadget) AbsoluteMouseEnabled() bool { return u.enabledDevices.AbsoluteMouse }
+
 func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 	switch itemKey {
 	case "absolute_mouse":

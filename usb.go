@@ -60,7 +60,7 @@ func initUsbGadget() {
 	gadget.SetOnKeysDownChange(func(state usbgadget.KeysDownState) {
 		// What the approval broker types (a password) never reaches the
 		// session (D20).
-		if currentSession != nil && !approvalsActing.Load() {
+		if currentSession != nil && !approvalsBlocking() {
 			currentSession.enqueueKeysDownState(state)
 			currentSession.resetKeepAliveTime()
 		}
@@ -77,8 +77,8 @@ func initUsbGadget() {
 func rpcHidReport(fn func() error) error {
 	approvalsInput.RLock()
 	defer approvalsInput.RUnlock()
-	if !usbReadyForHidReports() || approvalsActing.Load() {
-		return nil // the approval broker is clicking or typing (D20)
+	if !usbReadyForHidReports() || approvalsBlocking() {
+		return nil // the approval broker answers a screen request (D20)
 	}
 	if err := fn(); err != nil && !usbgadget.IsHIDTemporarilyUnavailableError(err) {
 		return err
@@ -143,7 +143,7 @@ func rpcGetKeyboardLedState() (state usbgadget.KeyboardState) {
 }
 
 func rpcGetKeysDownState() (state usbgadget.KeysDownState) {
-	if approvalsActing.Load() {
+	if approvalsBlocking() {
 		return usbgadget.KeysDownState{Keys: make([]byte, hidrpc.HidKeyBufferSize)}
 	}
 	return gadget.GetKeysDownState()
