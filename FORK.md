@@ -668,6 +668,7 @@ It skips HTML comments and fenced code blocks.
   - `scripts/fork/sync_approval.sh`
   - `internal/hostlink/hostlink.go`
   - `internal/hostlink/hostlink_test.go`
+  - `internal/usbgadget/config.go`
   - `internal/usbgadget/hid_keyboard.go`
   - `internal/usbgadget/utils.go`
   - `host_link.go`
@@ -677,6 +678,7 @@ It skips HTML comments and fenced code blocks.
   - `main.go`
   - `go.mod`
   - `go.sum`
+  - `Dockerfile.build`
   - `.github/workflows/fork-checks.yml`
 - **What:** BlitzKVM's remote approvals. A request on the computer (sudo, a 1Password CLI access prompt, a password
   dialog, the lock screen, an agent's `blitzkvm-remote confirm`) reaches the owner's iPhone and Macs, who approve it
@@ -686,29 +688,37 @@ It skips HTML comments and fenced code blocks.
   device run the same code; `SOURCE` there names the BlitzKVM commit, and CI checks the copy against it.
   - **Trust:** a roster signed by an owner's Secure Enclave key lists the approvers, the targets (the computer's
     root daemon key) and the relay. The first roster arrives through `setApprovalsEnabled` on an authenticated,
-    identity-pinned session; later ones only signed by an owner of the current one, with a higher sequence number.
+    identity-pinned session; later ones only signed by an owner of the current one, with a higher sequence number
+    (a roster stored for another broker key is ignored).
     Every request is signed by the computer's daemon and the broker, every decision by an approver; the computer's
     daemon checks decisions itself, so a compromised device can't approve sudo.
   - **Link:** the host link's stack (D17) listens on port 4023 for the computer's daemon (4 connections at a time,
     each authenticated by the roster's target key within the first message). The stack serves nothing else; the
     device's own services stay unreachable from the computer.
   - **Approvers:** `GET /approvals/v1/ws` (no cookie: approvers authenticate with their keys inside the protocol;
-    requests with an `Origin` header, that is browsers, get 403; 16 sockets at most), and outbound to the roster's
-    relay (a Cloudflare Worker that only sees sealed boxes). Every message to and from an approver is sealed with
-    HPKE.
+    requests with an `Origin` header, that is browsers, get 403; 16 sockets at most, new ones at 2 a second with a
+    burst of 8, since each may cost an HPKE open), and outbound to the roster's relay (a Cloudflare Worker that only
+    sees sealed boxes). Every message to and from an approver is sealed with HPKE. The broker sends a pending request
+    again to the roster's iPhones every 10 s (1Password) or 20 s (others) until it's answered, and a quiet push once
+    it ends.
   - **Keyboard and pointer:** for an approved screen request the computer's daemon sends steps (a click as a fraction
     of the display; Return, Escape, Tab, Backspace, Shift, Caps Lock; the approval's password with the key map of the
-    computer's input source, once). While the broker acts, the session's keyboard and pointer reports are dropped,
-    key states aren't sent to the session (or answered by `getKeyDownState`), and `KeyboardReportSecret` writes
-    reports without logging keys (not even a failed write's trace). Session reports take a read lock around that
-    check, so none in flight lands mid-typing. Caps Lock is turned off before characters are typed. A secret is
-    typed a character at a time; the daemon can abort between characters and learns how many were typed.
+    computer's input source, once). From the approval of a screen request until it ends (`Hold`), the session's
+    keyboard and pointer reports are dropped, between steps and characters too; keys the session held go up first
+    and their auto-release timers stop, and afterwards the session learns the keyboard's state. Key states aren't
+    sent to the session meanwhile (or answered by `getKeyDownState`), and `KeyboardReportSecret` writes reports
+    without logging keys (not even a failed write's trace). Session reports take a read lock around that check, so
+    none in flight lands mid-typing. Caps Lock is turned off before characters are typed. A secret is typed a
+    character at a time; the daemon can abort between characters and learns how many were typed. Any failed key
+    write counts, also a transient one, and a click needs the absolute pointer on (USB devices).
   - **API:** `getApprovalsState` (broker identity, roster sequence, approvers, the connected target, pending count,
     recent events without secrets) and `setApprovalsEnabled` (`{"enabled": bool, "roster": envelope}`; on needs the
     host link on). `setHostLinkState` refuses to turn the link off while approvals are on. Listed as `approvals` by
     `getFirmwareFeatures`. The broker takes requests only once the device's clock is synced.
   - **State:** `/userdata/jetkvm/approvals/` holds the broker's keys (`broker.key`) and the roster (`roster.json`),
-    written atomically; approvals are on while a roster is there. A factory reset removes the directory.
+    written atomically (the directory synced after the rename); approvals are on while a roster is there.
+    `getFirmwareFeatures` lists `approvals` only once the broker has started. A factory reset removes the directory
+    and D17's host-link flag. If the link listener's accept loop ends, the supervisor listens again.
 - **Why:** the computer's own prompts (1Password, sudo, macOS) accept only its Touch ID, an Apple Watch or a
   password; on a computer reached through the KVM none of them is at hand. The broker turns an approval on the
   owner's phone or Mac into the click or the typed password the prompt needs, or into a signed approval sudo checks.
