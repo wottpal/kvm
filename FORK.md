@@ -56,9 +56,10 @@ It skips HTML comments and fenced code blocks.
 - **Files:**
   - `README.md`
   - `FORK.md`
-  - `CLAUDE.md`
-- **What:** a notice at the top of `README.md` linking to this file; this file; `CLAUDE.md`, which tells coding agents
-  that every divergence is recorded here.
+  - `AGENTS.md`
+- **What:** a notice and a fork guide for maintainers and coding agents (rules, playbook, release steps, device safety)
+  at the top of `README.md`, above upstream's text; this file; `AGENTS.md`, a symlink to `README.md`, so agents read
+  the same guide. (The guide replaced a separate `CLAUDE.md` on 2026-11-02.)
 - **Remove when:** never (fork-only).
 
 ### D02 — Divergence audit in CI
@@ -828,7 +829,7 @@ On Apple silicon with Docker or OrbStack:
 
 ```sh
 bash -c 'source scripts/build_utils.sh && build_docker_image'   # linux/amd64 buildkit image (Rosetta)
-(cd ui && nvm use) && make frontend                              # Node 22, embedded via go:embed
+nvm use "$(cat ui/.nvmrc)" && make frontend                      # Node 22, embedded via go:embed
 make build_release VERSION=0.5.10                                # bin/jetkvm_app, ARM uClibc
 ```
 
